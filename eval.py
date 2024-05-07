@@ -1,5 +1,7 @@
 import logging
 import os
+import random
+import re
 import time
 
 import torch
@@ -25,17 +27,19 @@ from vllm import LLM
 # in transformers==4.10.1 during our work.
 logger = logging.getLogger(__name__)
 
+
 # class with a getitem
-class DummyDataset():
+class DummyDataset:
     def __getitem__(self, index):
         return {}
+
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
     # Get args
     parser = HfArgumentParser((WrappedSeq2SeqTrainingArguments,))
-    training_args, = parser.parse_args_into_dataclasses()
+    (training_args,) = parser.parse_args_into_dataclasses()
     set_seed(training_args.seed)
     args = Configure.Get(training_args.cfg)
 
@@ -46,10 +50,18 @@ def main() -> None:
     logging.info(f"loading test data from file {args.dataset.test_split_json}")
     assert args.dataset.test_split_json is not None, "Please specify the test split json file."
     with open(args.dataset.test_split_json) as f:
-        seq2seq_test_dataset= json.load(f)
-
-    test_dataset = TokenizedTestDataset(args, training_args, model_tokenizer,
-                                    seq2seq_test_dataset) if seq2seq_test_dataset else None
+        seq2seq_test_dataset = json.load(f)
+        # cwq_samples = [
+        #     sample for sample in seq2seq_test_dataset if sample["description"] == "task: compwebq"
+        # ]
+        # with open("cwq_samples.json", "w") as f:
+        #     json.dump(cwq_samples, f)
+            
+    test_dataset = (
+        TokenizedTestDataset(args, training_args, model_tokenizer, seq2seq_test_dataset)
+        if seq2seq_test_dataset
+        else None
+    )
 
     # Initialize our Trainer
     trainer = LlamaSeq2SeqTrainer(
@@ -58,16 +70,14 @@ def main() -> None:
         evaluator=evaluator,
         tokenizer=model_tokenizer,
     )
-    logging.info('Trainer build successfully.')
-
+    logging.info("Trainer build successfully.")
 
     logger.info("*** Predict ***")
 
     predict_results = trainer.predict(
-        test_dataset=test_dataset,
-        test_examples=seq2seq_test_dataset,
-        metric_key_prefix="predict"
+        test_dataset=test_dataset, test_examples=seq2seq_test_dataset, metric_key_prefix="predict"
     )
+
 
 if __name__ == "__main__":
     main()

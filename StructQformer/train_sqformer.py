@@ -291,9 +291,9 @@ if __name__ == "__main__":
         else:
             trainer.train()
 
-    if training_args.do_predict:
-        trainer.data_collator = DataCollatorForGenerating(llm_tokenizer)
-        logger.info("*** Predict ***")
-        metrics = trainer.predict(predict_dataset=test_dataset)
-        print(metrics)
-        trainer.log(metrics)
+    # if training_args.do_predict:
+    #     trainer.data_collator = DataCollatorForGenerating(llm_tokenizer)
+    #     logger.info("*** Predict ***")
+    #     metrics = trainer.predict(predict_dataset=test_dataset)
+    #     print(metrics)
+    #     trainer.log(metrics)

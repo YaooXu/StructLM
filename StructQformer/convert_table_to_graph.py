@@ -8,6 +8,7 @@ import re
 
 import pandas as pd
 import torch
+from tqdm import tqdm
 from utils.utils import load_json
 
 from collections import defaultdict
@@ -87,8 +88,8 @@ class TableConverter:
         smpl = sample.split(HEADER_TAG)
         cap = smpl[0].replace(CAP_TAG, "").strip()
         smpl = smpl[1].split(ROW_TAG)
-        headers = [h.strip() for h in smpl[0].strip().split(" | ")]
-        cells = [list(map(lambda x: x.strip(), row.strip().split(" | "))) for row in smpl[1:]]
+        headers = [h.strip() for h in smpl[0].strip().split("|")]
+        cells = [list(map(lambda x: x.strip(), row.strip().split("|"))) for row in smpl[1:]]
         for row in cells:
             assert len(row) == len(headers)
 
@@ -99,6 +100,7 @@ class TableConverter:
             cap, headers, data = self._text2table(table_str)
         except:
             print("Fail to parser the table...")
+            # cap, headers, data = self._text2table(table_str)
             return None
 
         cap = " ".join(cap.split()[: self.data_args.max_token_length])  # filter too long caption
@@ -174,7 +176,7 @@ class TableConverter:
         # label_ids = torch.zeros((len(header)-1, self.data_args.label_type_num), dtype=torch.float32)
         # assert len(label_ids) == len(labels) == len(header) -1
         col_mask = [0 for i in range(len(wordpieces_xt_all))]
-        col_mask[1 : 1 + len(header)] = [1] * len(header)
+        col_mask[1: 1 + len(header)] = [1] * len(header)
 
         # for col_i, lbl in enumerate(labels):
         #     for lbl_i in lbl:
@@ -218,25 +220,29 @@ class TableConverter:
 
 
 if __name__ == "__main__":
+
+    # path = "data/downloads/extracted/skginstruct.json"
+    # tab_tasks = ['tabmwp', 'hybridqa', 'tab_fact', 'wikitq', 'wikisql', 'fetaqa']
+    # tab_tasks = ['wikitq']
+
+    path = "data/processed/skginstruct_test_file_13b_34b.json"
+    tab_tasks = ['task: tabmwp', 'task: hybridqa', 'task: tabfact',
+                 'task: wiki table question', 'task: wikisql', 'task: fetaqa']
+    tab_tasks = ['task: wiki table question']
+    all_samples = load_json(path)
+
     tasks_to_samples = defaultdict(list)
-
-    path = "data/downloads/extracted/skginstruct.json"
-    # path = "data/processed/skginstruct_test_file_13b_34b.json"
-
-    samples = load_json(path)
-
-    for sample in samples:
+    for sample in all_samples:
         if "test" in path:
             tasks_to_samples[sample["description"]].append(sample)
         else:
             tasks_to_samples[sample["task_name"]].append(sample)
 
-    if "test" in path:
-        wtq_samples = tasks_to_samples["task: wiki table question"]
-    else:
-        wtq_samples = tasks_to_samples["wikitq"]
+    samples = []
+    for task in tab_tasks:
+        samples.extend(tasks_to_samples[task])
 
-    print(len(wtq_samples))
+    print(len(samples))
 
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
     new_tokens = ["[TAB]", "[HEAD]", "[CELL]", "[ROW]", "scinotexp"]
@@ -245,19 +251,19 @@ if __name__ == "__main__":
     converter = TableConverter(tokenizer)
 
     new_samples = []
-    for sample in wtq_samples:
+    for sample in tqdm(samples):
         if "test" in path:
-            question = sample["question"]
+            question = sample["question"] if 'question' in sample else sample['statement']
             ori_table = sample["struct_in"]
             sample['label'] = sample['seq_out']
-            sample["desc"] = (
-                re.findall(r"<</SYS>>\n\n([\s\S]*)\n\n\nquestion", sample["formatted_input"])[0].rstrip("\n")
-                + "\n\n"
-            )
+            sample["desc"] = re.findall(
+                r"<</SYS>>\n\n([\s\S]*)(question|statement)", sample["formatted_input"])[0][0]
         else:
-            question = re.findall(r"question:\n\n(.*)", sample["input"])[0]
-            ori_table = re.findall(r"table:\n\n(.*)\n\n\n", sample["input"])[0]
-            sample["desc"] = sample["input"].split("question:")[0].rstrip("\n") + "\n\n"
+            question = re.findall(
+                r"(question|statement):\n\n(.*)", sample["input"])[0][1]
+            ori_table = re.findall(r"table:\n\n([\s\S]*)\n\n\n", sample["input"])[0]
+            sample["desc"] = re.findall(
+                r"([\s\S]*)(question|statement):", sample["input"])[0][0]
 
         sample["question"] = question
 
@@ -266,11 +272,11 @@ if __name__ == "__main__":
 
         graph = converter._text2graph(new_table)
         if graph:
-            sample["desc"] = sample["desc"].replace(ori_table, new_table)
+            # sample["desc"] = sample["desc"].replace(ori_table, new_table)
             sample["struct_in"] = new_table
             new_samples.append(sample)
 
-    print(len(new_samples), len(wtq_samples))
+    print(len(new_samples), len(samples))
     if "test" in path:
         with open(f"data/WTQ/test.jsonl", "w") as f:
             for sample in new_samples:

@@ -1,5 +1,10 @@
 data/
 models/ckpts
-output/
+*output/
 **/*.pyc
 **/__pycache__/
+debug
+.history
+.hypothesis
+wandb
+*outputs/

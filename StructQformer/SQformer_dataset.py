@@ -311,8 +311,8 @@ if __name__ == "__main__":
     llm_tokenizer.add_tokens([graph_pad_token], special_tokens=True)
     llm_tokenizer.pad_token = llm_tokenizer.eos_token
 
-    max_seq_length = 2048
-    max_desc_length = 1792
+    max_seq_length = 2248
+    max_desc_length = 2048
     reprocess = True
     train_dataset = build_instruction_dataset(
         dataset_dir / f"train.jsonl",

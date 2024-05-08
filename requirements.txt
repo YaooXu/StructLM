@@ -1,7 +1,7 @@
---extra-index-url https://download.pytorch.org/whl/cu118
-torch==2.1.1+cu118 
-xformers==0.0.23+cu118
-vllm @ https://github.com/vllm-project/vllm/releases/download/v0.2.4/vllm-0.2.4+cu118-cp310-cp310-manylinux1_x86_64.whl#sha256=fa216a9bd90df9469737cccbfd6e01870e644a3ed8a83fea1ae20a3e3d72f7a5
+# --extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.1.1
+xformers==0.0.23
+vllm
 transformers==4.37.2
 accelerate==0.23.0
 bert-score==0.3.13

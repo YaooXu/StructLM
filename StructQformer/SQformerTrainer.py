@@ -1,16 +1,22 @@
-import sys
-
-sys.path.append("./src")
-from collections import defaultdict
-import json
-import os
-from re import L
-import numpy as np
-import pandas as pd
-from sympy import im
-import torch
-import torch.nn as nn
-from torch.utils.data import Dataset
+import easydict
+from transformers.trainer_utils import PredictionOutput, speed_metrics
+from SQformer_dataset import DataCollatorForGenerating, DataCollatorForGraphSupervisedDataset
+import wandb
+from transformers import Seq2SeqTrainer
+from transformers.integrations import WandbCallback
+from transformers.trainer_utils import EvalLoopOutput, EvalPrediction, get_last_checkpoint
+import datasets
+from typing import Any, Callable, Dict, List, Tuple
+import time
+import pathlib
+import math
+import copy
+from typing import TYPE_CHECKING, Optional, Union
+from transformers.modeling_utils import unwrap_model
+from transformers.trainer_utils import speed_metrics
+from transformers.trainer_callback import TrainerControl, TrainerState
+from transformers.deepspeed import is_deepspeed_zero3_enabled
+from transformers.data.data_collator import DataCollator
 from transformers import (
     EvalPrediction,
     GenerationConfig,
@@ -22,53 +28,25 @@ from transformers import (
     AutoTokenizer,
     logging,
 )
-from transformers.data.data_collator import DataCollator
-from transformers.deepspeed import is_deepspeed_zero3_enabled
-from transformers.trainer_callback import TrainerControl, TrainerState
-from transformers.trainer_utils import speed_metrics
-from transformers.modeling_utils import unwrap_model
+from torch.utils.data import Dataset
+import torch.nn as nn
+import torch
+from sympy import im
+import pandas as pd
+import numpy as np
+from re import L
+import os
+import json
+from collections import defaultdict
+import sys
 
-from typing import TYPE_CHECKING, Optional, Union
+from eval_json import eval_loose_json
 
-import copy
-import math
-import pathlib
-import time
-from typing import Any, Callable, Dict, List, Tuple
+sys.path.append("./src")
 
-import datasets
-from transformers.trainer_utils import EvalLoopOutput, EvalPrediction, get_last_checkpoint
-from transformers.integrations import WandbCallback
-from transformers import Seq2SeqTrainer
-import wandb
-from SQformer_dataset import DataCollatorForGenerating, DataCollatorForGraphSupervisedDataset
-from transformers.trainer_utils import PredictionOutput, speed_metrics
 
 logger = logging.get_logger(__name__)
 TRAINING_ARGS_NAME = "training_args.bin"
-
-from transformers.integrations import WandbCallback
-
-
-def calculate_mean(data):
-    result = {}
-    count = {}  # 用于记录每个key对应的值的数量
-
-    # 遍历每个字典
-    for d in data:
-        for key, value in d.items():
-            if key in result:
-                result[key] += value
-                count[key] += 1
-            else:
-                result[key] = value
-                count[key] = 1
-
-    # 计算每个key对应的平均值
-    for key in result:
-        result[key] /= count[key]
-
-    return result
 
 
 class PredictionProgressCallback(TrainerCallback):
@@ -94,15 +72,15 @@ class PredictionProgressCallback(TrainerCallback):
         self.test_examples = test_examples[:num_samples]
         self.freq = freq
 
-    # # for DEBUG
-    # def on_epoch_begin(self, args, state, control, **kwargs):
-    #     super().on_epoch_begin(args, state, control, **kwargs)
-    #     self.sample_dataset = self.sample_dataset.select(range(100))
-    #     self.test_examples = self.test_examples[:100]
-    def on_epoch_end(self, args, state, control, **kwargs):
-        super().on_epoch_end(args, state, control, **kwargs)
-        # control the frequency of logging by logging the predictions
-        # every `freq` epochs
+    # for DEBUG
+    def on_epoch_begin(self, args, state, control, **kwargs):
+        super().on_epoch_begin(args, state, control, **kwargs)
+        self.sample_dataset = self.sample_dataset.select(range(100))
+        self.test_examples = self.test_examples[:100]
+    # def on_epoch_end(self, args, state, control, **kwargs):
+    #     super().on_epoch_end(args, state, control, **kwargs)
+    #     # control the frequency of logging by logging the predictions
+    #     # every `freq` epochs
         if args.should_log:
             logger.info(f"epoch {state.epoch}, {self.freq}")
         if state.epoch % self.freq == 0:
@@ -249,7 +227,7 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
                 num_steps=math.ceil(output.num_samples / total_batch_size),
             )
         )
-        
+
         predictions = self.post_process_function(predict_examples, output, self.tokenizer)
         if self.args.should_log:
             cur_output_dir = f"{self.args.output_dir}/{metric_key_prefix}_{self.state.global_step}"
@@ -257,7 +235,10 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
 
             with open(os.path.join(cur_output_dir, "predictions.json"), "w") as f:
                 json.dump(predictions, f)
-                    
+
+            eval_loose_json(easydict.EasyDict(
+                {'json_file': os.path.join(cur_output_dir, "predictions.json")}
+            ))
         return output
 
     def prediction_step(

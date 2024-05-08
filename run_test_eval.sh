@@ -1,6 +1,13 @@
-CFG_PREFIX=$1
+# CFG_PREFIX=${1:-StructLM-7B}
+# GPU=0
+
+CFG_PREFIX=${1:-StructLM-7B-syn}
+GPU=1
+
 INP_MAX_LEN=${2:-2176}
 EVAL_BSIZE=${3:-64}
+
+OUTPUT_DIR=output/cwq/${CFG_PREFIX}
 
 kwargs=" 
 --overwrite_output_dir \
@@ -18,12 +25,12 @@ echo ""
 #     exit 0
 # fi
 
-python eval.py $kwargs \
+CUDA_VISIBLE_DEVICES=${GPU} python eval.py $kwargs \
     --input_max_length ${INP_MAX_LEN} \
     --run_name ${CFG_PREFIX} \
-    --output_dir output/${CFG_PREFIX} \
+    --output_dir ${OUTPUT_DIR} \
     --cfg ${CFG_PREFIX}.cfg \
     --vllm true
 
 # run the evaluation script
-python eval_json.py --run_name ${CFG_PREFIX}
+python eval_json.py --run_name ${OUTPUT_DIR}

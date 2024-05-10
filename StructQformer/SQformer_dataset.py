@@ -83,7 +83,7 @@ def build_instruction_dataset(
     max_seq_length: int = 768,
     max_desc_length: int = 512,
     data_cache_dir=None,
-    preprocessing_num_workers=16,
+    preprocessing_num_workers=8,
     num_query_tokens=10,
     training=True,
     shuffle_desc=True,
@@ -109,13 +109,14 @@ def build_instruction_dataset(
         sources = []
         targets = []
         questions = []
-        descs = []
+        insts = []
+        struct_ins = []
         bi_graphs = []
 
-        for label, question, desc, struct_in in zip(
-            examples["label"], examples["question"], examples["desc"], examples["struct_in"]
+        for label, question, inst, struct_in in zip(
+            examples["label"], examples["question"], examples["inst"], examples["struct_in"]
         ):
-            source = f"Graph representation: {DEFAULT_GRAPH_PAD_TOKEN * num_query_tokens}\n\nquestion:\n\n{question}"
+            source = f"{DEFAULT_GRAPH_PAD_TOKEN * num_query_tokens}\n\n\nquestion:\n\n{question} [/INST]"
 
             target = f"{label}{llm_tokenizer.eos_token}"
 
@@ -129,11 +130,15 @@ def build_instruction_dataset(
             #     random.shuffle(node_texts)
             #     desc = "\n".join(node_texts)
 
-            descs.append(desc)
+            insts.append('[INST] ' + inst)
+            struct_ins.append(struct_in)
 
         # add_special_tokens=False: not add <s>
-        tokenized_descs = llm_tokenizer(
-            descs, return_attention_mask=False, add_special_tokens=False
+        tokenized_insts = llm_tokenizer(
+            insts, return_attention_mask=False, add_special_tokens=False
+        )
+        tokenized_struct_ins = llm_tokenizer(
+            struct_ins, return_attention_mask=False, add_special_tokens=False
         )
         tokenized_sources = llm_tokenizer(
             sources, return_attention_mask=False, add_special_tokens=False
@@ -149,13 +154,14 @@ def build_instruction_dataset(
 
         # lens = []
 
-        for d, s, t, q in zip(
-            tokenized_descs["input_ids"],
+        for inst, struct_in, s, t, q in zip(
+            tokenized_insts["input_ids"],
+            tokenized_struct_ins["input_ids"],
             tokenized_sources["input_ids"],
             tokenized_targets["input_ids"],
             tokenized_questions["input_ids"],
         ):
-            s = [llm_tokenizer.bos_token_id] + d[:max_desc_length] + s
+            s = [llm_tokenizer.bos_token_id] + inst + struct_in[:max_desc_length] + s
             if training:
                 input_ids = torch.LongTensor(s + t)[:max_seq_length]
                 labels = torch.LongTensor([IGNORE_INDEX] * len(s) + t)[:max_seq_length]
@@ -196,15 +202,12 @@ def build_instruction_dataset(
             data_cache_dir = str(os.path.dirname(file))
         cache_path = os.path.join(
             data_cache_dir,
-            os.path.basename(file).split(".")[0] + f"{max_desc_length}_{max_seq_length}",
+            os.path.basename(file).split(".")[0] + f"{max_desc_length}_{max_seq_length}_{num_query_tokens}",
         )
         os.makedirs(cache_path, exist_ok=True)
         try:
-            if reprocess:
-                raise NotImplementedError
-            else:
-                processed_dataset = datasets.load_from_disk(cache_path)
-                logger.info(f"training datasets-{file} has been loaded from disk")
+            processed_dataset = datasets.load_from_disk(cache_path)
+            logger.info(f"training datasets-{file} has been loaded from disk")
         except Exception as e:
             raw_dataset = load_dataset("json", data_files=file)
             tokenized_dataset = raw_dataset.map(
@@ -291,14 +294,14 @@ class DataCollatorForGenerating(DataCollatorForGraphSupervisedDataset):
     def _set_llm_padding_side(self):
         self.llm_tokenizer.padding_side = "left"
 
-    
+
 if __name__ == "__main__":
     from transformers import AutoTokenizer, set_seed
     from torch.utils.data import DataLoader, Dataset
 
     set_seed(0)
 
-    dataset_dir = pathlib.Path("data/WTQ")
+    dataset_dir = pathlib.Path("data/WTQ_SYS_PROPMT")
 
     llm_tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf", use_fast=False)
     bert_tokenizer = AutoTokenizer.from_pretrained("google-bert/bert-base-uncased", use_fast=False)
@@ -311,8 +314,10 @@ if __name__ == "__main__":
     llm_tokenizer.add_tokens([graph_pad_token], special_tokens=True)
     llm_tokenizer.pad_token = llm_tokenizer.eos_token
 
-    max_seq_length = 2248
+    max_seq_length = 2560
     max_desc_length = 2048
+    num_query_tokens = 16
+    preprocessing_num_workers = 10
     reprocess = True
     train_dataset = build_instruction_dataset(
         dataset_dir / f"train.jsonl",
@@ -320,8 +325,8 @@ if __name__ == "__main__":
         bert_tokenizer,
         max_seq_length=max_seq_length,
         max_desc_length=max_desc_length,
-        num_query_tokens=16,
-        preprocessing_num_workers=16,
+        num_query_tokens=num_query_tokens,
+        preprocessing_num_workers=preprocessing_num_workers,
         reprocess=reprocess,
     )
     val_dataset = build_instruction_dataset(
@@ -330,8 +335,8 @@ if __name__ == "__main__":
         bert_tokenizer,
         max_seq_length=max_seq_length,
         max_desc_length=max_desc_length,
-        num_query_tokens=16,
-        preprocessing_num_workers=16,
+        num_query_tokens=num_query_tokens,
+        preprocessing_num_workers=preprocessing_num_workers,
         reprocess=reprocess,
     )
     test_dataset = build_instruction_dataset(
@@ -340,8 +345,8 @@ if __name__ == "__main__":
         bert_tokenizer,
         max_seq_length=max_seq_length,
         max_desc_length=max_desc_length,
-        num_query_tokens=16,
-        preprocessing_num_workers=16,
+        num_query_tokens=num_query_tokens,
+        preprocessing_num_workers=preprocessing_num_workers,
         training=False,
         reprocess=reprocess,
     )
@@ -349,6 +354,7 @@ if __name__ == "__main__":
 
     loader = DataLoader(val_dataset, 2, collate_fn=data_collator)
     for batch in loader:
+        print(batch)
         break
 
     # from StructQformer.models.hytrel import Encoder
@@ -370,7 +376,6 @@ if __name__ == "__main__":
     #     save_every_n_epochs: int=1
     #     save_top_k: int=1
     #     checkpoint_path: str=''
-
 
     #     def __post_init__(self):
     #         if self.optimizer.lower() not in {
@@ -400,7 +405,7 @@ if __name__ == "__main__":
 
     #         optimizer = optim_cls(*args, **kwargs)
     #         return optimizer
-    
+
     # model_config = AutoConfig.from_pretrained("google-bert/bert-base-uncased")
     # model_config.update({'vocab_size': len(bert_tokenizer), "pre_norm": False, "activation_dropout":0.1, "gated_proj": False})
 
@@ -423,4 +428,3 @@ if __name__ == "__main__":
     # encoder.to('cuda')
     # graph = batch['graph']['graph'].to('cuda')
     # x = encoder(batch['graph']['graph'])
-    

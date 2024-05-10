@@ -96,6 +96,8 @@ class TableConverter:
         return cap, headers, cells
 
     def _text2graph(self, table_str, return_dict=False):
+        table_str = table_str.replace("col :", "<caption> [TAB] <header>")
+        table_str = re.sub(r"row\s\d+\s:", "<row>", table_str)
         try:
             cap, headers, data = self._text2table(table_str)
         except:
@@ -221,11 +223,12 @@ class TableConverter:
 
 if __name__ == "__main__":
 
-    # path = "data/downloads/extracted/skginstruct.json"
-    # tab_tasks = ['tabmwp', 'hybridqa', 'tab_fact', 'wikitq', 'wikisql', 'fetaqa']
-    # tab_tasks = ['wikitq']
+    path = "data/processed/skginstruct.json"
+    tab_tasks = ['tabmwp', 'hybridqa', 'tab_fact', 'wikitq', 'wikisql', 'fetaqa']
+    tab_tasks = ['wikitq']
 
     path = "data/processed/skginstruct_test_file_13b_34b.json"
+    path = "data/processed/skginstruct_test_file_7b.json"
     tab_tasks = ['task: tabmwp', 'task: hybridqa', 'task: tabfact',
                  'task: wiki table question', 'task: wikisql', 'task: fetaqa']
     tab_tasks = ['task: wiki table question']
@@ -254,31 +257,30 @@ if __name__ == "__main__":
     for sample in tqdm(samples):
         if "test" in path:
             question = sample["question"] if 'question' in sample else sample['statement']
-            ori_table = sample["struct_in"]
+            table = sample["struct_in"]
             sample['label'] = sample['seq_out']
-            sample["desc"] = re.findall(
-                r"<</SYS>>\n\n([\s\S]*)(question|statement)", sample["formatted_input"])[0][0]
+            sample['inst'] = re.findall(
+                r"(<<SYS>>[\s\S]*table:\n\n)", sample["formatted_input"])[0]
         else:
             question = re.findall(
                 r"(question|statement):\n\n(.*)", sample["input"])[0][1]
-            ori_table = re.findall(r"table:\n\n([\s\S]*)\n\n\n", sample["input"])[0]
-            sample["desc"] = re.findall(
-                r"([\s\S]*)(question|statement):", sample["input"])[0][0]
+            table = re.findall(r"table:\n\n([\s\S]*)\n\n\n", sample["input"])[0]
+            sys_prompt = '<<SYS>>\n' + sample['sys_prompt'] + '\n<</SYS>>\n\n'
+            sample["inst"] = sys_prompt + re.findall(
+                r"([\s\S]*table:\n\n)", sample["input"])[0]
+
+        # print(sample['inst'])
 
         sample["question"] = question
 
-        new_table = ori_table.replace("col :", "<caption> [TAB] <header>")
-        new_table = re.sub(r"row\s\d+\s:", "<row>", new_table)
-
-        graph = converter._text2graph(new_table)
+        graph = converter._text2graph(table)
         if graph:
-            # sample["desc"] = sample["desc"].replace(ori_table, new_table)
-            sample["struct_in"] = new_table
+            sample["struct_in"] = table
             new_samples.append(sample)
 
     print(len(new_samples), len(samples))
     if "test" in path:
-        with open(f"data/WTQ/test.jsonl", "w") as f:
+        with open(f"data/WTQ_SYS_PROPMT/test.jsonl", "w") as f:
             for sample in new_samples:
                 f.write(json.dumps(sample) + "\n")
     else:
@@ -290,7 +292,7 @@ if __name__ == "__main__":
         )
 
         for dataset, name in zip([train, val], ["train", "val"]):
-            with open(f"data/WTQ/{name}.jsonl", "w") as f:
+            with open(f"data/WTQ_SYS_PROPMT/{name}.jsonl", "w") as f:
                 for sample in dataset:
                     f.write(json.dumps(sample) + "\n")
 

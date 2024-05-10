@@ -1,13 +1,13 @@
-# CFG_PREFIX=${1:-StructLM-7B}
-# GPU=0
+CFG_PREFIX=${1:-StructLM-7B}
+GPU=0
 
-CFG_PREFIX=${1:-StructLM-7B-syn}
-GPU=1
+# CFG_PREFIX=${1:-StructLM-7B-syn}
+# GPU=1
 
 INP_MAX_LEN=${2:-2176}
 EVAL_BSIZE=${3:-64}
 
-OUTPUT_DIR=output/cwq/${CFG_PREFIX}
+OUTPUT_DIR=outputs/${CFG_PREFIX}
 
 kwargs=" 
 --overwrite_output_dir \

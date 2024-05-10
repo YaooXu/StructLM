@@ -8,3 +8,5 @@ debug
 .hypothesis
 wandb
 *outputs/
+.vscode
+nohup*

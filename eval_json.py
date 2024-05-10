@@ -41,7 +41,7 @@ if __name__=="__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--run_name", type=str, default="run1")
     parser.add_argument("--json_file", type=str, default=None)
-    parser.add_argument("--dir", type=str, default='sqformer_outputs/data/WTQ/Llama-2-7b-hf_v2.5_1792_2048_16_1_0.05_1e-5')
+    parser.add_argument("--dir", type=str, default=None)
     args = parser.parse_args()
     if args.json_file:
         eval_loose_json(args)

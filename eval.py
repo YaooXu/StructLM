@@ -42,7 +42,7 @@ def main() -> None:
     (training_args,) = parser.parse_args_into_dataclasses()
     set_seed(training_args.seed)
     args = Configure.Get(training_args.cfg)
-
+ 
     evaluator = utils.tool.get_evaluator(args.evaluate.tool)(args)
     model = utils.tool.get_model(args.model.name)(args)
     model_tokenizer = model.tokenizer
@@ -51,11 +51,10 @@ def main() -> None:
     assert args.dataset.test_split_json is not None, "Please specify the test split json file."
     with open(args.dataset.test_split_json) as f:
         seq2seq_test_dataset = json.load(f)
-        # cwq_samples = [
-        #     sample for sample in seq2seq_test_dataset if sample["description"] == "task: compwebq"
-        # ]
-        # with open("cwq_samples.json", "w") as f:
-        #     json.dump(cwq_samples, f)
+        seq2seq_test_dataset = [
+            sample for sample in seq2seq_test_dataset if sample["description"] == "task: wiki table question"
+            # sample for sample in seq2seq_test_dataset if sample["description"] == "task: compwebq"
+        ][:100]
             
     test_dataset = (
         TokenizedTestDataset(args, training_args, model_tokenizer, seq2seq_test_dataset)

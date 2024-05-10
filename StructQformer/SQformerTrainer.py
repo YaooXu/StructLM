@@ -39,7 +39,8 @@ import os
 import json
 from collections import defaultdict
 import sys
-
+from transformers.utils import is_peft_available, WEIGHTS_NAME
+from peft import PeftModel
 from eval_json import eval_loose_json
 
 sys.path.append("./src")
@@ -72,23 +73,23 @@ class PredictionProgressCallback(TrainerCallback):
         self.test_examples = test_examples[:num_samples]
         self.freq = freq
 
-    # for DEBUG
-    def on_epoch_begin(self, args, state, control, **kwargs):
-        super().on_epoch_begin(args, state, control, **kwargs)
-        self.sample_dataset = self.sample_dataset.select(range(100))
-        self.test_examples = self.test_examples[:100]
-    # def on_epoch_end(self, args, state, control, **kwargs):
-    #     super().on_epoch_end(args, state, control, **kwargs)
-    #     # control the frequency of logging by logging the predictions
-    #     # every `freq` epochs
+    # # for DEBUG
+    # def on_epoch_begin(self, args, state, control, **kwargs):
+    #     super().on_epoch_begin(args, state, control, **kwargs)
+    #     self.sample_dataset = self.sample_dataset.select(range(100))
+    #     self.test_examples = self.test_examples[:100]
+    def on_epoch_end(self, args, state, control, **kwargs):
+        super().on_epoch_end(args, state, control, **kwargs)
+        # control the frequency of logging by logging the predictions
+        # every `freq` epochs
         if args.should_log:
             logger.info(f"epoch {state.epoch}, {self.freq}")
-        if state.epoch % self.freq == 0:
-            self.trainer.data_collator = DataCollatorForGenerating(self.tokenizer)
-            # generate predictions
-            metrics = self.trainer.predict(self.sample_dataset, self.test_examples)
+            
+        self.trainer.data_collator = DataCollatorForGenerating(self.tokenizer)
+        # generate predictions
+        metrics = self.trainer.predict(self.sample_dataset, self.test_examples)
 
-            self.trainer.data_collator = DataCollatorForGraphSupervisedDataset(self.tokenizer)
+        self.trainer.data_collator = DataCollatorForGraphSupervisedDataset(self.tokenizer)
 
 
 def post_process_function(
@@ -357,6 +358,25 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
         os.makedirs(output_dir, exist_ok=True)
         logger.info(f"Saving model checkpoint to {output_dir}")
 
+        supported_classes = (PreTrainedModel,) if not is_peft_available() else (PreTrainedModel, PeftModel)
+        # Save a trained model and configuration using `save_pretrained()`.
+        # They can then be reloaded using `from_pretrained()`
+        if not isinstance(self.model.llm, supported_classes):
+            if state_dict is None:
+                state_dict = self.model.llm.state_dict()
+
+            if isinstance(unwrap_model(self.model.llm), supported_classes):
+                unwrap_model(self.model.llm).save_pretrained(
+                    output_dir, state_dict=state_dict, safe_serialization=self.args.save_safetensors
+                )
+            else:
+                logger.info("Trainer.model is not a `PreTrainedModel`, only saving its state dict.")
+                torch.save(state_dict, os.path.join(output_dir, WEIGHTS_NAME))
+        else:
+            self.model.llm.save_pretrained(
+                output_dir, state_dict=state_dict, safe_serialization=self.args.save_safetensors
+            )
+            
         _state_dict = state_dict
         if _state_dict is None:
             # Only save the model itself if we are using distributed training

@@ -1,6 +1,5 @@
 import logging
 import os
-from turtle import forward
 from typing import Optional
 import torch
 from transformers import (
@@ -24,6 +23,7 @@ import torch.nn as nn
 
 from SQformer_dataset import DEFAULT_CVT_TOKEN, DEFAULT_GRAPH_PAD_TOKEN
 from torch.nn import CrossEntropyLoss
+from peft import get_peft_config, get_peft_model, LoraConfig, TaskType
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +116,7 @@ class StructQformer(nn.Module):
             list_graph_embeds = []
             list_graph_attn = []
             for i in range(len(idxes) - 1):
-                list_graph_embeds.append(graph_embeds[0][idxes[i] : idxes[i + 1], :])
+                list_graph_embeds.append(graph_embeds[0][idxes[i]: idxes[i + 1], :])
                 list_graph_attn.append(torch.LongTensor([1] * (idxes[i + 1] - idxes[i])))
             graph_embeds = torch.nn.utils.rnn.pad_sequence(list_graph_embeds, batch_first=True)
             graph_attention_mask = torch.nn.utils.rnn.pad_sequence(
@@ -141,7 +141,7 @@ class StructQformer(nn.Module):
                 query_length=self.num_query_tokens,
                 use_cache=False,
             )
-            query_embeds = question_output.last_hidden_state[:, -self.num_query_tokens :, :]
+            query_embeds = question_output.last_hidden_state[:, -self.num_query_tokens:, :]
 
         query_embeds = self.projector(query_embeds)
 
@@ -172,6 +172,14 @@ class StructQformerLLM(nn.Module):
         self.llm: LlamaForCausalLM = AutoModelForCausalLM.from_pretrained(
             args.model_name_or_path, **kwargs
         )
+
+        if not args.freeze_backbone:
+            logger.info('loading lora model')
+            peft_config = LoraConfig(
+                task_type=TaskType.CAUSAL_LM, inference_mode=False, r=8, lora_alpha=32, lora_dropout=0.1
+            )
+            model = get_peft_model(self.llm, peft_config)
+            model.print_trainable_parameters()
 
         self.qformer = StructQformer(args, hypergraph_enc_config)
 
@@ -238,7 +246,7 @@ class StructQformerLLM(nn.Module):
 
         batch_size = inputs_embeds.shape[0]
         for i in range(batch_size):
-            inputs_embeds[i][graph_pad_st_idx[i] : graph_pad_ed_idx[i]] = query_embeds[i]
+            inputs_embeds[i][graph_pad_st_idx[i]: graph_pad_ed_idx[i]] = query_embeds[i]
 
         return inputs_embeds
 

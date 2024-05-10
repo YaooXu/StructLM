@@ -1,42 +1,10 @@
-from collections import OrderedDict
 import sys
+sys.path.append("./")
 
-from utils.utils import load_jsonl
-
-sys.path.append("./StructQformer")
-
-import numpy as np
-import wandb
-
-from SQformerTrainer import (
-    StructQASeq2SeqTrainer,
-    PredictionProgressCallback,
-    post_process_function,
-)
-from torch.nn.modules import Module
-from torch.optim.lr_scheduler import LambdaLR
-from torch.optim.optimizer import Optimizer as Optimizer
-from torch.utils.data import DataLoader
-
-from dataclasses import dataclass, field
-import json
-import logging
-import pathlib
-from typing import TYPE_CHECKING, Optional, Union
-
-import torch
-import transformers
-
-from StructQformer.SQformer_dataset import (
-    DEFAULT_GRAPH_PAD_TOKEN,
-    DataCollatorForGenerating,
-    DataCollatorForGraphSupervisedDataset,
-    build_instruction_dataset,
-)
-
-# from model.GraphLLM import GraphLlamaForCausalLM, GraphLlamaModel, init_tokenizer_and_embeds
-from StructQformer.models import StructQformerLLM
-
+import multiprocess
+import os
+from peft.tuners.lora import LoraLayer
+from transformers.trainer_utils import PredictionOutput
 from transformers import (
     AutoTokenizer,
     AutoConfig,
@@ -44,15 +12,35 @@ from transformers import (
     TrainingArguments,
     set_seed,
 )
-from transformers.trainer_utils import PredictionOutput
+from StructQformer.models import StructQformerLLM
+from StructQformer.SQformer_dataset import (
+    DEFAULT_GRAPH_PAD_TOKEN,
+    DataCollatorForGenerating,
+    DataCollatorForGraphSupervisedDataset,
+    build_instruction_dataset,
+)
+import transformers
+import torch
+from typing import TYPE_CHECKING, Optional, Union
+import pathlib
+import logging
+import json
+from dataclasses import dataclass, field
+from torch.utils.data import DataLoader
+from torch.optim.optimizer import Optimizer as Optimizer
+from torch.optim.lr_scheduler import LambdaLR
+from torch.nn.modules import Module
+from SQformerTrainer import (
+    StructQASeq2SeqTrainer,
+    PredictionProgressCallback,
+    post_process_function,
+)
+import wandb
+import numpy as np
+from collections import OrderedDict
 
-from peft.tuners.lora import LoraLayer
-import os
+from utils.utils import load_jsonl
 
-import multiprocess
-
-# # to aviod datasets.map from hanging
-# multiprocess.set_start_method("spawn", force=True)
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +53,7 @@ class ModelArguments:
     num_query_tokens: int = field(default=10)
     cross_attention_freq: int = field(default=1)
 
-    freeze_backbone: bool = field(default=True)
+    freeze_backbone: bool = field(default=False)
 
     strategy: str = field(default="pt")
 
@@ -73,12 +61,11 @@ class ModelArguments:
 
     qformer_ckpt_path: str = field(default=None)
 
-
 @dataclass
 class DataArguments:
     dataset_dir: str = field(default="dataset/webqsp/processed_files")
-    max_desc_length: int = field(default=512)
-    max_seq_length: int = field(default=768)
+    max_desc_length: int = field(default=2048)
+    max_seq_length: int = field(default=2560)
     preprocessing_num_workers: int = field(default=8)
     data_cache_dir: Optional[str] = field(
         default=None, metadata={"help": "The datasets processed stored"}
@@ -199,9 +186,10 @@ if __name__ == "__main__":
 
     if model.qformer.hypergraph_encoder:
         # load graph encoder
+        logger.info(f"loading hypergraph_encoder ckpt")
         state_dict = torch.load(
             open(
-                "/home/yaoxu/hypergraph-tabular-lm/checkpoints/electra/epoch=4-step=16345.ckpt/checkpoint/mp_rank_00_model_states.pt",
+                'models/ckpts/hytrel/mp_rank_00_model_states.pt',
                 "rb",
             )
         )
@@ -214,7 +202,7 @@ if __name__ == "__main__":
                 new_state_dict[name] = v
         model.qformer.hypergraph_encoder.load_state_dict(new_state_dict, strict=True)
 
-    if model_args.freeze_backbone is True:
+    if model_args.freeze_backbone:
         for name, param in model.named_parameters():
             if "qformer" in name:
                 param.requires_grad = True
@@ -280,7 +268,7 @@ if __name__ == "__main__":
         # compute_metrics=compute_metrics,
     )
 
-    callback = PredictionProgressCallback(trainer, llm_tokenizer, test_dataset,test_examples)
+    callback = PredictionProgressCallback(trainer, llm_tokenizer, test_dataset, test_examples)
     trainer.add_callback(callback)
 
     if training_args.do_train:
@@ -291,9 +279,7 @@ if __name__ == "__main__":
         else:
             trainer.train()
 
-    # if training_args.do_predict:
-    #     trainer.data_collator = DataCollatorForGenerating(llm_tokenizer)
-    #     logger.info("*** Predict ***")
-    #     metrics = trainer.predict(predict_dataset=test_dataset)
-    #     print(metrics)
-    #     trainer.log(metrics)
+    if training_args.do_predict:
+        trainer.data_collator = DataCollatorForGenerating(llm_tokenizer)
+        logger.info("*** Predict ***")
+        metrics = trainer.predict(test_dataset, test_examples)

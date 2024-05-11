@@ -31,6 +31,7 @@ wandb online
 
 model_name_or_path=meta-llama/Llama-2-7b-hf
 # model_name_or_path=codellama/CodeLlama-7b-Instruct-hf
+        # --gradient_checkpointing \
 
 for model_name_or_path in meta-llama/Llama-2-7b-hf codellama/CodeLlama-7b-Instruct-hf; do
 
@@ -39,7 +40,6 @@ for model_name_or_path in meta-llama/Llama-2-7b-hf codellama/CodeLlama-7b-Instru
     deepspeed --master_port=${master_port} StructQformer/train_sqformer.py \
         --model_name_or_path=${model_name_or_path} \
         --do_train \
-        --gradient_checkpointing \
         --overwrite_output_dir \
         --deepspeed=${deepspeed_config_file} \
         --do_eval \
@@ -50,10 +50,10 @@ for model_name_or_path in meta-llama/Llama-2-7b-hf codellama/CodeLlama-7b-Instru
         --max_seq_length=${max_seq_length} \
         --cross_attention_freq=${cross_attention_freq} \
         --dataset_dir=${dataset_dir} \
-        --output_dir=/mnt/userdata/StructLM/outputs/${dataset_dir}/${model_name}_lora_${strategy}_${max_desc_length}_${max_seq_length}_${num_query_tokens}_${cross_attention_freq}_${wd}_${lr} \
+        --output_dir=/mnt/userdata/StructLM/outputs/${dataset_dir}/${model_name}_lora_emb_${strategy}_${max_desc_length}_${max_seq_length}_${num_query_tokens}_${cross_attention_freq}_${wd}_${lr} \
         --seed=0 \
         --num_train_epochs=${num_train_epochs} \
-        --per_device_train_batch_size=4 \
+        --per_device_train_batch_size=2 \
         --per_device_eval_batch_size=4 \
         --gradient_accumulation_steps=2 \
         --save_strategy=steps \

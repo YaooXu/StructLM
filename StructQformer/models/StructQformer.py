@@ -160,7 +160,7 @@ class StructQformer(nn.Module):
 
 
 class StructQformerLLM(nn.Module):
-    def __init__(self, args, hypergraph_enc_config, **kwargs) -> None:
+    def __init__(self, args, hypergraph_enc_config, llm_tokenizer, **kwargs) -> None:
         super().__init__()
 
         self.num_query_tokens = args.num_query_tokens
@@ -174,11 +174,17 @@ class StructQformerLLM(nn.Module):
             args.model_name_or_path,
             **kwargs
         )
+        self.init_tokenizer_and_embeds(llm_tokenizer, DEFAULT_GRAPH_PAD_TOKEN)
 
         if not args.freeze_backbone:
             logger.info('loading lora model')
             peft_config = LoraConfig(
-                task_type=TaskType.CAUSAL_LM, inference_mode=False, r=8, lora_alpha=32, lora_dropout=0.1
+                task_type=TaskType.CAUSAL_LM, 
+                inference_mode=False,
+                target_modules=args.target_modules.split(','),
+                r=8, 
+                lora_alpha=32, 
+                lora_dropout=0.1
             )
             self.llm = get_peft_model(self.llm, peft_config)
             self.llm.print_trainable_parameters()
@@ -226,7 +232,6 @@ class StructQformerLLM(nn.Module):
 
     def init_tokenizer_and_embeds(
         self,
-        bert_tokenizer: AutoTokenizer,
         llm_tokenizer: AutoTokenizer,
         graph_pad_token=DEFAULT_GRAPH_PAD_TOKEN,
     ):

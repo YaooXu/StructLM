@@ -53,7 +53,8 @@ class ModelArguments:
     cross_attention_freq: int = field(default=1)
 
     freeze_backbone: bool = field(default=False)
-
+    target_modules: str = field(default='q_proj,v_proj,embed_tokens')
+    
     strategy: str = field(default="pt")
 
     skip_graph_encoder: bool = field(default=False)
@@ -175,11 +176,9 @@ if __name__ == "__main__":
     )
 
     model = StructQformerLLM(model_args, hypergraph_enc_config,
+                             llm_tokenizer,
                              use_cache=False if training_args.gradient_checkpointing else True,
                              torch_dtype=torch_dtype)
-
-    # load after resize word embeddings
-    model.init_tokenizer_and_embeds(bert_tokenizer, llm_tokenizer, DEFAULT_GRAPH_PAD_TOKEN)
 
     if model_args.qformer_ckpt_path is not None:
         logger.info(f"loading qformer ckpt from {model_args.qformer_ckpt_path}")

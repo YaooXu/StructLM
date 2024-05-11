@@ -202,7 +202,8 @@ def build_instruction_dataset(
             data_cache_dir = str(os.path.dirname(file))
         cache_path = os.path.join(
             data_cache_dir,
-            os.path.basename(file).split(".")[0] + f"{max_desc_length}_{max_seq_length}_{num_query_tokens}",
+            os.path.basename(file).split(".")[0] + \
+                f"{max_desc_length}_{max_seq_length}_{num_query_tokens}_{llm_tokenizer.name_or_path.split('/')[-1]}",
         )
         os.makedirs(cache_path, exist_ok=True)
         try:

@@ -38,7 +38,6 @@ from SQformerTrainer import (
 import wandb
 import numpy as np
 from collections import OrderedDict
-
 from utils.utils import load_jsonl
 
 
@@ -175,7 +174,9 @@ if __name__ == "__main__":
         }
     )
 
-    model = StructQformerLLM(model_args, hypergraph_enc_config, torch_dtype=torch_dtype)
+    model = StructQformerLLM(model_args, hypergraph_enc_config,
+                             use_cache=False if training_args.gradient_checkpointing else True,
+                             torch_dtype=torch_dtype)
 
     # load after resize word embeddings
     model.init_tokenizer_and_embeds(bert_tokenizer, llm_tokenizer, DEFAULT_GRAPH_PAD_TOKEN)
@@ -183,31 +184,6 @@ if __name__ == "__main__":
     if model_args.qformer_ckpt_path is not None:
         logger.info(f"loading qformer ckpt from {model_args.qformer_ckpt_path}")
         model.qformer.load_state_dict(torch.load(model_args.qformer_ckpt_path))
-
-    if model.qformer.hypergraph_encoder:
-        # load graph encoder
-        logger.info(f"loading hypergraph_encoder ckpt")
-        state_dict = torch.load(
-            open(
-                'models/ckpts/hytrel/mp_rank_00_model_states.pt',
-                "rb",
-            )
-        )
-
-        new_state_dict = OrderedDict()
-        logger.info(f"loading graph encoder")
-        for k, v in state_dict["module"].items():
-            if "model" in k:
-                name = k[13:]  # remove `module.model.`
-                new_state_dict[name] = v
-        model.qformer.hypergraph_encoder.load_state_dict(new_state_dict, strict=True)
-
-    if model_args.freeze_backbone:
-        for name, param in model.named_parameters():
-            if "qformer" in name:
-                param.requires_grad = True
-            else:
-                param.requires_grad = False
 
     # for name, module in model.named_modules():
     #     if isinstance(module, LoraLayer):

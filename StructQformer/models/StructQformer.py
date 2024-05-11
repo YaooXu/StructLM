@@ -1,3 +1,4 @@
+from collections import OrderedDict
 import logging
 import os
 from typing import Optional
@@ -170,7 +171,8 @@ class StructQformerLLM(nn.Module):
         self.llm_pad_token_id = None
 
         self.llm: LlamaForCausalLM = AutoModelForCausalLM.from_pretrained(
-            args.model_name_or_path, **kwargs
+            args.model_name_or_path,
+            **kwargs
         )
 
         if not args.freeze_backbone:
@@ -178,10 +180,34 @@ class StructQformerLLM(nn.Module):
             peft_config = LoraConfig(
                 task_type=TaskType.CAUSAL_LM, inference_mode=False, r=8, lora_alpha=32, lora_dropout=0.1
             )
-            model = get_peft_model(self.llm, peft_config)
-            model.print_trainable_parameters()
+            self.llm = get_peft_model(self.llm, peft_config)
+            self.llm.print_trainable_parameters()
+        else:
+            for name, param in self.llm.named_parameters():
+                param.requires_grad = False
 
-        self.qformer = StructQformer(args, hypergraph_enc_config)
+        if self.num_query_tokens > 0:
+            self.qformer = StructQformer(args, hypergraph_enc_config)
+
+            if self.qformer.hypergraph_encoder:
+                # load graph encoder
+                logger.info(f"loading hypergraph_encoder ckpt")
+                state_dict = torch.load(
+                    open(
+                        'models/ckpts/hytrel/mp_rank_00_model_states.pt',
+                        "rb",
+                    )
+                )
+
+                new_state_dict = OrderedDict()
+                logger.info(f"loading graph encoder")
+                for k, v in state_dict["module"].items():
+                    if "model" in k:
+                        name = k[13:]  # remove `module.model.`
+                        new_state_dict[name] = v
+                self.qformer.hypergraph_encoder.load_state_dict(new_state_dict, strict=True)
+        else:
+            self.qformer = None
 
     @property
     def config(self):
@@ -219,7 +245,7 @@ class StructQformerLLM(nn.Module):
             [DEFAULT_GRAPH_PAD_TOKEN]
         )[0]
         self.llm_pad_token_id = llm_tokenizer.pad_token_id
-        llm.resize_token_embeddings(len(llm_tokenizer))
+        llm.resize_token_embeddings(len(llm_tokenizer), pad_to_multiple_of=8)
 
     def print_trainable_params(self):
         trainable_params = 0
@@ -239,14 +265,15 @@ class StructQformerLLM(nn.Module):
     def construct_inputs_embeds(self, input_ids, graph):
         inputs_embeds = self.llm.get_input_embeddings()(input_ids)
 
-        query_embeds = self.qformer(graph).to(inputs_embeds.dtype)
+        if self.num_query_tokens > 0:
+            query_embeds = self.qformer(graph).to(inputs_embeds.dtype)
 
-        graph_pad_st_idx = torch.argmax((input_ids == self.llm_graph_pad_token_id).int(), dim=1)
-        graph_pad_ed_idx = graph_pad_st_idx + self.num_query_tokens
+            graph_pad_st_idx = torch.argmax((input_ids == self.llm_graph_pad_token_id).int(), dim=1)
+            graph_pad_ed_idx = graph_pad_st_idx + self.num_query_tokens
 
-        batch_size = inputs_embeds.shape[0]
-        for i in range(batch_size):
-            inputs_embeds[i][graph_pad_st_idx[i]: graph_pad_ed_idx[i]] = query_embeds[i]
+            batch_size = inputs_embeds.shape[0]
+            for i in range(batch_size):
+                inputs_embeds[i][graph_pad_st_idx[i]: graph_pad_ed_idx[i]] = query_embeds[i]
 
         return inputs_embeds
 

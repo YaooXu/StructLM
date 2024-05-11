@@ -15,7 +15,7 @@ num_train_epochs=5
 lr=2e-5
 wd=0.05
 eval_steps=500
-master_port=29501
+master_port=29500
 strategy=v2.5
 num_query_tokens=10
 cross_attention_freq=1
@@ -32,14 +32,13 @@ wandb online
 model_name_or_path=meta-llama/Llama-2-7b-hf
 # model_name_or_path=codellama/CodeLlama-7b-Instruct-hf
 
-for model_name_or_path in meta-llama/Llama-2-7b-hf ; do
+for model_name_or_path in meta-llama/Llama-2-7b-hf codellama/CodeLlama-7b-Instruct-hf; do
 
     model_name=$(basename "$model_name_or_path")
 
-    deepspeed --include localhost:0,1,2,3,4 --master_port=${master_port} StructQformer/train_sqformer.py \
+    deepspeed --master_port=${master_port} StructQformer/train_sqformer.py \
         --model_name_or_path=${model_name_or_path} \
         --do_train \
-        --freeze_backbone \
         --gradient_checkpointing \
         --overwrite_output_dir \
         --deepspeed=${deepspeed_config_file} \
@@ -51,45 +50,11 @@ for model_name_or_path in meta-llama/Llama-2-7b-hf ; do
         --max_seq_length=${max_seq_length} \
         --cross_attention_freq=${cross_attention_freq} \
         --dataset_dir=${dataset_dir} \
-        --output_dir=./outputs/${dataset_dir}/${model_name}_${strategy}_${max_desc_length}_${max_seq_length}_${num_query_tokens}_${cross_attention_freq}_${wd}_${lr} \
+        --output_dir=/mnt/userdata/StructLM/outputs/${dataset_dir}/${model_name}_lora_${strategy}_${max_desc_length}_${max_seq_length}_${num_query_tokens}_${cross_attention_freq}_${wd}_${lr} \
         --seed=0 \
         --num_train_epochs=${num_train_epochs} \
-        --per_device_train_batch_size=1 \
-        --per_device_eval_batch_size=2 \
-        --gradient_accumulation_steps=2 \
-        --save_strategy=steps \
-        --evaluation_strategy=steps \
-        --eval_steps=${eval_steps} \
-        --save_steps=${eval_steps} \
-        --save_total_limit=5 \
-        --learning_rate=${lr} \
-        --weight_decay=${wd} \
-        --warmup_ratio=0.03 \
-        --lr_scheduler_type=cosine \
-        --logging_steps=50 \
-        --report_to wandb
-    
-        deepspeed --include localhost:0,1,2,3,4 --master_port=${master_port} StructQformer/train_sqformer.py \
-        --model_name_or_path=${model_name_or_path} \
-        --do_train \
-        --skip_graph_encoder \
-        --freeze_backbone \
-        --gradient_checkpointing \
-        --overwrite_output_dir \
-        --deepspeed=${deepspeed_config_file} \
-        --do_eval \
-        --bf16 \
-        --strategy=${strategy} \
-        --num_query_tokens=${num_query_tokens} \
-        --max_desc_length=${max_desc_length} \
-        --max_seq_length=${max_seq_length} \
-        --cross_attention_freq=${cross_attention_freq} \
-        --dataset_dir=${dataset_dir} \
-        --output_dir=./outputs/${dataset_dir}/${model_name}_skip_ge_${strategy}_${max_desc_length}_${max_seq_length}_${num_query_tokens}_${cross_attention_freq}_${wd}_${lr} \
-        --seed=0 \
-        --num_train_epochs=${num_train_epochs} \
-        --per_device_train_batch_size=1 \
-        --per_device_eval_batch_size=2 \
+        --per_device_train_batch_size=4 \
+        --per_device_eval_batch_size=4 \
         --gradient_accumulation_steps=2 \
         --save_strategy=steps \
         --evaluation_strategy=steps \

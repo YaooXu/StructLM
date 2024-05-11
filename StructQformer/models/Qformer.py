@@ -430,21 +430,21 @@ class BertLayer(nn.Module):
         present_key_value = self_attention_outputs[-1]
 
         if query_length > 0:
-            query_attention_output = attention_output[:, -query_length:, :]
+            # query_attention_output = attention_output[:, -query_length:, :]
 
             if self.has_cross_attention:
                 assert (
                     encoder_hidden_states is not None
                 ), "encoder_hidden_states must be given for cross-attention layers"
                 cross_attention_outputs = self.crossattention(
-                    query_attention_output,
+                    attention_output,
                     attention_mask,
                     head_mask,
                     encoder_hidden_states,
                     encoder_attention_mask,
                     output_attentions=output_attentions,
                 )
-                query_attention_output = cross_attention_outputs[0]
+                attention_output = cross_attention_outputs[0]
                 outputs = (
                     outputs + cross_attention_outputs[1:-1]
                 )  # add cross attentions if we output attention weights
@@ -453,7 +453,7 @@ class BertLayer(nn.Module):
                 self.feed_forward_chunk_query,
                 self.chunk_size_feed_forward,
                 self.seq_len_dim,
-                query_attention_output,
+                attention_output[:, -query_length:, :],
             )
             if attention_output.shape[1] > query_length:
                 layer_output_text = apply_chunking_to_forward(

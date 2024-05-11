@@ -53,7 +53,7 @@ class ModelArguments:
     cross_attention_freq: int = field(default=1)
 
     freeze_backbone: bool = field(default=False)
-    target_modules: str = field(default='q_proj,v_proj,embed_tokens')
+    target_modules: str = field(default='q_proj,v_proj')
     
     strategy: str = field(default="pt")
 

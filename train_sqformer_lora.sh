@@ -15,8 +15,8 @@ num_train_epochs=5
 lr=2e-5
 wd=0.05
 eval_steps=500
-master_port=29500
-strategy=v2.5
+master_port=29502
+strategy=v2.6
 num_query_tokens=10
 cross_attention_freq=1
 

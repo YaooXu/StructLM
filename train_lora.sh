@@ -16,7 +16,7 @@ lr=2e-5
 wd=0.05
 eval_steps=500
 master_port=29504
-strategy=v2.6
+strategy=pt
 num_query_tokens=10
 cross_attention_freq=1
 
@@ -33,13 +33,14 @@ model_name_or_path=meta-llama/Llama-2-7b-hf
 # model_name_or_path=codellama/CodeLlama-7b-Instruct-hf
         # --gradient_checkpointing \
 
-for model_name_or_path in meta-llama/Llama-2-7b-hf codellama/CodeLlama-7b-Instruct-hf; do
+for num_query_tokens in 0 10 ; do
 
     model_name=$(basename "$model_name_or_path")
 
     deepspeed --master_port=${master_port} StructQformer/train_sqformer.py \
         --model_name_or_path=${model_name_or_path} \
         --do_train \
+        --finetuning_type=lora \
         --overwrite_output_dir \
         --deepspeed=${deepspeed_config_file} \
         --do_eval \

@@ -52,7 +52,7 @@ class ModelArguments:
     num_query_tokens: int = field(default=10)
     cross_attention_freq: int = field(default=1)
 
-    freeze_backbone: bool = field(default=False)
+    finetuning_type: str = field(default='lora')
     target_modules: str = field(default='q_proj,v_proj')
     
     strategy: str = field(default="pt")

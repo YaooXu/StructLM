@@ -225,13 +225,13 @@ if __name__ == "__main__":
 
     path = "data/processed/skginstruct.json"
     tab_tasks = ['tabmwp', 'hybridqa', 'tab_fact', 'wikitq', 'wikisql', 'fetaqa']
-    tab_tasks = ['wikitq']
+    tab_tasks = ['tabmwp']
 
-    path = "data/processed/skginstruct_test_file_13b_34b.json"
-    path = "data/processed/skginstruct_test_file_7b.json"
-    tab_tasks = ['task: tabmwp', 'task: hybridqa', 'task: tabfact',
-                 'task: wiki table question', 'task: wikisql', 'task: fetaqa']
-    tab_tasks = ['task: wiki table question']
+    # path = "data/processed/skginstruct_test_file_13b_34b.json"
+    # path = "data/processed/skginstruct_test_file_7b.json"
+    # tab_tasks = ['task: tabmwp', 'task: hybridqa', 'task: tabfact',
+    #              'task: wiki table question', 'task: wikisql', 'task: fetaqa']
+    # tab_tasks = ['task: wiki table question']
     all_samples = load_json(path)
 
     tasks_to_samples = defaultdict(list)
@@ -280,7 +280,7 @@ if __name__ == "__main__":
 
     print(len(new_samples), len(samples))
     if "test" in path:
-        with open(f"data/WTQ_SYS_PROPMT/test.jsonl", "w") as f:
+        with open(f"data/TAB_SYS_PROPMT/test.jsonl", "w") as f:
             for sample in new_samples:
                 f.write(json.dumps(sample) + "\n")
     else:
@@ -292,7 +292,7 @@ if __name__ == "__main__":
         )
 
         for dataset, name in zip([train, val], ["train", "val"]):
-            with open(f"data/WTQ_SYS_PROPMT/{name}.jsonl", "w") as f:
+            with open(f"data/TAB_SYS_PROPMT/{name}.jsonl", "w") as f:
                 for sample in dataset:
                     f.write(json.dumps(sample) + "\n")
 

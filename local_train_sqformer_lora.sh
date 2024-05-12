@@ -1,17 +1,16 @@
 # chmod 777 /mnt/publiccache/yaoxu
 # chmod 777 /mnt/userdata
-# export HF_HOME=/mnt/publiccache/huggingface
-# export NCCL_P2P_DISABLE=1 NCCL_IB_DISABLE=1
 # cd /mnt/publiccache/yaoxu/StructLM/
 
+export HF_HOME=/mnt/publiccache/huggingface
+export NCCL_P2P_DISABLE=1 NCCL_IB_DISABLE=1
 export HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 export WANDB_PROJECT=WTQ
 
-# deepspeed_config_file=ds_zero2_no_offload.json
 deepspeed_config_file=ds_zero2.json
 max_desc_length=2048
 max_seq_length=2560
-num_train_epochs=5
+num_train_epochs=3
 lr=2e-5
 wd=0.05
 eval_steps=500
@@ -33,13 +32,15 @@ model_name_or_path=meta-llama/Llama-2-7b-hf
 # model_name_or_path=codellama/CodeLlama-7b-Instruct-hf
         # --gradient_checkpointing \
 
-for model_name_or_path in meta-llama/Llama-2-7b-hf codellama/CodeLlama-7b-Instruct-hf; do
+for num_query_tokens in 0 10 ; do
 
     model_name=$(basename "$model_name_or_path")
 
-    deepspeed --master_port=${master_port} StructQformer/train_sqformer.py \
+    deepspeed --include localhost:0,1,2,3 --master_port=${master_port} StructQformer/train_sqformer.py \
         --model_name_or_path=${model_name_or_path} \
         --do_train \
+        --target_modules q_proj,v_proj,embed_tokens \
+        --gradient_checkpointing \
         --overwrite_output_dir \
         --deepspeed=${deepspeed_config_file} \
         --do_eval \
@@ -50,10 +51,10 @@ for model_name_or_path in meta-llama/Llama-2-7b-hf codellama/CodeLlama-7b-Instru
         --max_seq_length=${max_seq_length} \
         --cross_attention_freq=${cross_attention_freq} \
         --dataset_dir=${dataset_dir} \
-        --output_dir=/mnt/userdata/StructLM/outputs/${dataset_dir}/${model_name}_lora64_${strategy}_${max_desc_length}_${max_seq_length}_${num_query_tokens}_${cross_attention_freq}_${wd}_${lr} \
+        --output_dir=./outputs/${dataset_dir}/${model_name}_lora64_${strategy}_${max_desc_length}_${max_seq_length}_${num_query_tokens}_${cross_attention_freq}_${wd}_${lr} \
         --seed=0 \
         --num_train_epochs=${num_train_epochs} \
-        --per_device_train_batch_size=2 \
+        --per_device_train_batch_size=1 \
         --per_device_eval_batch_size=4 \
         --gradient_accumulation_steps=2 \
         --save_strategy=steps \

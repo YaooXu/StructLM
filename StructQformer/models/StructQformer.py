@@ -176,22 +176,27 @@ class StructQformerLLM(nn.Module):
         )
         self.init_tokenizer_and_embeds(llm_tokenizer, DEFAULT_GRAPH_PAD_TOKEN)
 
-        if not args.freeze_backbone:
+        if args.finetuning_type == 'full':
+            for name, param in self.llm.named_parameters():
+                param.requires_grad = True
+        elif args.finetuning_type == 'lora':
             logger.info('loading lora model')
             peft_config = LoraConfig(
                 task_type=TaskType.CAUSAL_LM, 
                 inference_mode=False,
                 target_modules=args.target_modules.split(','),
-                r=8, 
-                lora_alpha=32, 
+                r=64, 
+                lora_alpha=128, 
                 lora_dropout=0.1
             )
             self.llm = get_peft_model(self.llm, peft_config)
             self.llm.print_trainable_parameters()
-        else:
+        elif args.finetuning_type == 'freeze_backbone':
             for name, param in self.llm.named_parameters():
                 param.requires_grad = False
-
+        else:
+            raise NotImplementedError
+        
         if self.num_query_tokens > 0:
             self.qformer = StructQformer(args, hypergraph_enc_config)
 

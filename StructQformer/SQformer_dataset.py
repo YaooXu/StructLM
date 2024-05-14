@@ -1,3 +1,6 @@
+import sys
+sys.path.append('./')
+
 from collections import defaultdict
 from dataclasses import dataclass
 import logging
@@ -80,10 +83,10 @@ def build_instruction_dataset(
     data_path: Union[List[str], str],
     llm_tokenizer: transformers.PreTrainedTokenizer,
     bert_tokenizer: transformers.PreTrainedTokenizer,
-    max_seq_length: int = 768,
-    max_desc_length: int = 512,
+    max_seq_length: int = 2560,
+    max_desc_length: int = 2048,
     data_cache_dir=None,
-    preprocessing_num_workers=8,
+    preprocessing_num_workers=32,
     num_query_tokens=10,
     training=True,
     shuffle_desc=True,
@@ -115,8 +118,12 @@ def build_instruction_dataset(
 
         for label, question, inst, struct_in in zip(
             examples["label"], examples["question"], examples["inst"], examples["struct_in"]
-        ):
-            source = f"{DEFAULT_GRAPH_PAD_TOKEN * num_query_tokens}\n\n\nquestion:\n\n{question} [/INST]"
+        ):  
+            if num_query_tokens > 0:
+                source = f"\n\ntable representation tokens: {DEFAULT_GRAPH_PAD_TOKEN * num_query_tokens}\n\n\nquestion:\n\n{question}"
+            else:
+                source = f"\n\n\nquestion:\n\n{question}"
+            source += "\n\n### Response:\n"
 
             target = f"{label}{llm_tokenizer.eos_token}"
 
@@ -130,7 +137,7 @@ def build_instruction_dataset(
             #     random.shuffle(node_texts)
             #     desc = "\n".join(node_texts)
 
-            insts.append('[INST] ' + inst)
+            insts.append(inst)
             struct_ins.append(struct_in)
 
         # add_special_tokens=False: not add <s>
@@ -302,9 +309,9 @@ if __name__ == "__main__":
 
     set_seed(0)
 
-    dataset_dir = pathlib.Path("data/WTQ_SYS_PROPMT")
+    dataset_dir = pathlib.Path("data/5Task_Mistral")
 
-    llm_tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf", use_fast=False)
+    llm_tokenizer = AutoTokenizer.from_pretrained("TIGER-Lab/StructLM-7B-Mistral", use_fast=False)
     bert_tokenizer = AutoTokenizer.from_pretrained("google-bert/bert-base-uncased", use_fast=False)
 
     graph_pad_token = DEFAULT_GRAPH_PAD_TOKEN
@@ -317,8 +324,8 @@ if __name__ == "__main__":
 
     max_seq_length = 2560
     max_desc_length = 2048
-    num_query_tokens = 16
-    preprocessing_num_workers = 10
+    num_query_tokens = 10
+    preprocessing_num_workers = 32
     reprocess = True
     train_dataset = build_instruction_dataset(
         dataset_dir / f"train.jsonl",

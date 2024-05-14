@@ -11,16 +11,18 @@ export WANDB_PROJECT=WTQ
 deepspeed_config_file=ds_zero2.json
 max_desc_length=2048
 max_seq_length=2560
-num_train_epochs=5
+num_train_epochs=3
 lr=2e-5
 wd=0.05
 eval_steps=500
-master_port=29504
-strategy=pt
+master_port=29501
+strategy=v2.6
 num_query_tokens=10
 cross_attention_freq=1
+finetuning_type=freeze_backbone
 
-dataset_dir=data/WTQ_SYS_PROPMT
+dataset_dir=data/WTQ_Mistral
+
 
 wandb online
 
@@ -29,18 +31,19 @@ wandb online
 
             # --skip_graph_encoder \
 
-model_name_or_path=meta-llama/Llama-2-7b-hf
+model_name_or_path=TIGER-Lab/StructLM-7B-Mistral
 # model_name_or_path=codellama/CodeLlama-7b-Instruct-hf
         # --gradient_checkpointing \
 
-for num_query_tokens in 0 10 ; do
+for num_query_tokens in 8 16 32 64; do
 
     model_name=$(basename "$model_name_or_path")
 
     deepspeed --master_port=${master_port} StructQformer/train_sqformer.py \
         --model_name_or_path=${model_name_or_path} \
         --do_train \
-        --finetuning_type=lora \
+        --gradient_checkpointing \
+        --finetuning_type=${finetuning_type} \
         --overwrite_output_dir \
         --deepspeed=${deepspeed_config_file} \
         --do_eval \
@@ -51,7 +54,7 @@ for num_query_tokens in 0 10 ; do
         --max_seq_length=${max_seq_length} \
         --cross_attention_freq=${cross_attention_freq} \
         --dataset_dir=${dataset_dir} \
-        --output_dir=/mnt/userdata/StructLM/outputs/${dataset_dir}/${model_name}_lora64_${strategy}_${max_desc_length}_${max_seq_length}_${num_query_tokens}_${cross_attention_freq}_${wd}_${lr} \
+        --output_dir=./outputs/${dataset_dir}/${model_name}_${finetuning_type}_${strategy}_${max_desc_length}_${max_seq_length}_${num_query_tokens}_${cross_attention_freq}_${wd}_${lr} \
         --seed=0 \
         --num_train_epochs=${num_train_epochs} \
         --per_device_train_batch_size=2 \
@@ -61,7 +64,7 @@ for num_query_tokens in 0 10 ; do
         --evaluation_strategy=steps \
         --eval_steps=${eval_steps} \
         --save_steps=${eval_steps} \
-        --save_total_limit=5 \
+        --save_total_limit=2 \
         --learning_rate=${lr} \
         --weight_decay=${wd} \
         --warmup_ratio=0.03 \

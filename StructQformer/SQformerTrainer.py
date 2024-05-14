@@ -119,9 +119,7 @@ def post_process_function(
         )
 
     for i in range(len(predictions)):
-        for k in examples[i]:
-            if k not in predictions[i]:
-                predictions[i][k] = examples[i][k]
+        predictions[i] = {**examples[i], **predictions[i]}
 
     return predictions
 

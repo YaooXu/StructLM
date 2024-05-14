@@ -180,14 +180,15 @@ class StructQformerLLM(nn.Module):
             for name, param in self.llm.named_parameters():
                 param.requires_grad = True
         elif args.finetuning_type == 'lora':
+            self.llm.enable_input_require_grads()
             logger.info('loading lora model')
             peft_config = LoraConfig(
                 task_type=TaskType.CAUSAL_LM, 
                 inference_mode=False,
                 target_modules=args.target_modules.split(','),
-                r=64, 
-                lora_alpha=128, 
-                lora_dropout=0.1
+                r=8, 
+                lora_alpha=16, 
+                lora_dropout=0.05
             )
             self.llm = get_peft_model(self.llm, peft_config)
             self.llm.print_trainable_parameters()
@@ -233,7 +234,7 @@ class StructQformerLLM(nn.Module):
         self.llm.generation_config = value
 
     def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs):
-        self.llm.gradient_checkpointing_enable(gradient_checkpointing_kwargs)
+        self.llm.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
 
     def init_tokenizer_and_embeds(
         self,
@@ -250,12 +251,13 @@ class StructQformerLLM(nn.Module):
         # qformer.resize_token_embeddings(len(bert_tokenizer))
 
         llm_tokenizer.add_tokens([graph_pad_token], special_tokens=True)
-        llm_tokenizer.pad_token = llm_tokenizer.eos_token
+        if llm_tokenizer.pad_token is None:
+            llm_tokenizer.pad_token = llm_tokenizer.eos_token
         self.llm_graph_pad_token_id = llm_tokenizer.convert_tokens_to_ids(
             [DEFAULT_GRAPH_PAD_TOKEN]
         )[0]
         self.llm_pad_token_id = llm_tokenizer.pad_token_id
-        llm.resize_token_embeddings(len(llm_tokenizer), pad_to_multiple_of=8)
+        llm.resize_token_embeddings(len(llm_tokenizer))
 
     def print_trainable_params(self):
         trainable_params = 0
@@ -282,10 +284,16 @@ class StructQformerLLM(nn.Module):
             graph_pad_ed_idx = graph_pad_st_idx + self.num_query_tokens
 
             batch_size = inputs_embeds.shape[0]
+            new_inputs_embeds = torch.zeros_like(inputs_embeds).to(inputs_embeds.device)
             for i in range(batch_size):
-                inputs_embeds[i][graph_pad_st_idx[i]: graph_pad_ed_idx[i]] = query_embeds[i]
-
-        return inputs_embeds
+                # inputs_embeds[i][graph_pad_st_idx[i]: graph_pad_ed_idx[i]] = query_embeds[i]
+                new_inputs_embeds[i][:graph_pad_st_idx[i]] = inputs_embeds[i][:graph_pad_st_idx[i]]
+                new_inputs_embeds[i][graph_pad_st_idx[i]: graph_pad_ed_idx[i]] = query_embeds[i]
+                new_inputs_embeds[i][graph_pad_ed_idx[i]:] = inputs_embeds[i][graph_pad_ed_idx[i]:]
+        else:
+            new_inputs_embeds = inputs_embeds
+            
+        return new_inputs_embeds
 
     def forward(
         self,

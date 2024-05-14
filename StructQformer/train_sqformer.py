@@ -1,3 +1,4 @@
+import random
 import sys
 sys.path.append("./")
 
@@ -52,9 +53,9 @@ class ModelArguments:
     num_query_tokens: int = field(default=10)
     cross_attention_freq: int = field(default=1)
 
-    finetuning_type: str = field(default='lora')
+    finetuning_type: str = field(default='freeze_backbone')
     target_modules: str = field(default='q_proj,v_proj')
-    
+
     strategy: str = field(default="pt")
 
     skip_graph_encoder: bool = field(default=False)
@@ -203,32 +204,43 @@ if __name__ == "__main__":
         model.print_trainable_params()
 
     dataset_dir = pathlib.Path(data_args.dataset_dir)
-    train_dataset = build_instruction_dataset(
-        dataset_dir / f"train.jsonl",
-        llm_tokenizer,
-        bert_tokenizer,
-        max_seq_length=data_args.max_seq_length,
-        max_desc_length=data_args.max_desc_length,
-        num_query_tokens=model_args.num_query_tokens,
-    )
-    eval_dataset = build_instruction_dataset(
-        dataset_dir / f"val.jsonl",
-        llm_tokenizer,
-        bert_tokenizer,
-        max_seq_length=data_args.max_seq_length,
-        max_desc_length=data_args.max_desc_length,
-        num_query_tokens=model_args.num_query_tokens,
-    )
-    test_dataset = build_instruction_dataset(
-        dataset_dir / f"test.jsonl",
-        llm_tokenizer,
-        bert_tokenizer,
-        max_seq_length=data_args.max_seq_length,
-        max_desc_length=data_args.max_desc_length,
-        num_query_tokens=model_args.num_query_tokens,
-        training=False,
-    )
-    test_examples = load_jsonl(dataset_dir / f"test.jsonl")
+
+    train_dataset, eval_dataset = None, None
+    if training_args.do_train:
+        train_dataset = build_instruction_dataset(
+            dataset_dir / f"train.jsonl",
+            llm_tokenizer,
+            bert_tokenizer,
+            max_seq_length=data_args.max_seq_length,
+            max_desc_length=data_args.max_desc_length,
+            num_query_tokens=model_args.num_query_tokens,
+        )
+        eval_dataset = build_instruction_dataset(
+            dataset_dir / f"val.jsonl",
+            llm_tokenizer,
+            bert_tokenizer,
+            max_seq_length=data_args.max_seq_length,
+            max_desc_length=data_args.max_desc_length,
+            num_query_tokens=model_args.num_query_tokens,
+        )
+        eval_dataset = eval_dataset.select(random.sample(range(len(eval_dataset)), k=1000))
+
+    if training_args.do_train or training_args.do_predict:
+        test_dataset = build_instruction_dataset(
+            dataset_dir / f"test.jsonl",
+            llm_tokenizer,
+            bert_tokenizer,
+            max_seq_length=data_args.max_seq_length,
+            max_desc_length=data_args.max_desc_length,
+            num_query_tokens=model_args.num_query_tokens,
+            training=False,
+        )
+        test_examples = load_jsonl(dataset_dir / f"ori_test.jsonl")
+        
+        # for debug
+        # idxes = random.sample(range(len(test_examples)), k=1000)
+        # test_dataset = test_dataset.select(idxes)
+        # test_examples = [test_examples[i] for i in idxes]
 
     data_collator = DataCollatorForGraphSupervisedDataset(llm_tokenizer)
 
@@ -253,8 +265,8 @@ if __name__ == "__main__":
             trainer.train(resume_from_checkpoint=True)
         else:
             trainer.train()
-
-    if training_args.do_predict:
+            
+    elif training_args.do_predict:
         trainer.data_collator = DataCollatorForGenerating(llm_tokenizer)
         logger.info("*** Predict ***")
         metrics = trainer.predict(test_dataset, test_examples)

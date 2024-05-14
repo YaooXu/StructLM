@@ -1,7 +1,9 @@
 # export HF_DATASETS_OFFLINE=1 
 # export TRANSFORMERS_OFFLINE=1
 
-export PYTHONPATH=/home/yaoxu/StructLM
+export HF_HOME=/mnt/publiccache/huggingface
+export NCCL_P2P_DISABLE=1 NCCL_IB_DISABLE=1
+export HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 export WANDB_PROJECT=WTQ
 
 # deepspeed_config_file=ds_zero2_no_offload.json
@@ -16,7 +18,7 @@ master_port=29500
 num_query_tokens=0
 cross_attention_freq=1
 
-dataset_dir=data/WTQ_SYS_PROPMT
+dataset_dir=data/WTQ_Mistral
 
 wandb offline
 
@@ -25,13 +27,12 @@ wandb offline
 
             # --skip_graph_encoder \
 
-# model_name_or_path=meta-llama/Llama-2-7b-hf
-model_name_or_path=models/ckpts/StructLM-7B
+model_name_or_path=TIGER-Lab/StructLM-7B-Mistral
 model_name=$(basename "$model_name_or_path")
 
 for strategy in pt; do
     for lr in 1e-5; do
-        deepspeed --include localhost:0,1,2,3,4 --master_port=${master_port} StructQformer/train_sqformer.py \
+        deepspeed --include localhost:0,1,2,3 --master_port=${master_port} StructQformer/train_sqformer.py \
             --model_name_or_path=${model_name_or_path} \
             --do_predict \
             --bf16 \

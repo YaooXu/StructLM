@@ -119,9 +119,10 @@ def post_process_function(
         )
 
     for i in range(len(predictions)):
-        predictions[i] = {**examples[i], **predictions[i]}
+        # predictions[i] = {**examples[i], **predictions[i]}
+        examples[i].update(predictions[i])
 
-    return predictions
+    return examples
 
 
 class StructQASeq2SeqTrainer(Seq2SeqTrainer):

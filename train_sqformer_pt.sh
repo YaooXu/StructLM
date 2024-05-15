@@ -64,7 +64,7 @@ for num_query_tokens in 8 16 32 64; do
         --evaluation_strategy=steps \
         --eval_steps=${eval_steps} \
         --save_steps=${eval_steps} \
-        --save_total_limit=2 \
+        --save_total_limit=1 \
         --learning_rate=${lr} \
         --weight_decay=${wd} \
         --warmup_ratio=0.03 \

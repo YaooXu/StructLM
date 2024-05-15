@@ -52,7 +52,7 @@ for strategy in pt; do
             --evaluation_strategy=steps \
             --eval_steps=${eval_steps} \
             --save_steps=${eval_steps} \
-            --save_total_limit=5 \
+            --save_total_limit=1 \
             --learning_rate=${lr} \
             --weight_decay=${wd} \
             --warmup_ratio=0.03 \

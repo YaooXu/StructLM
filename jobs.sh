@@ -58,7 +58,7 @@ for model_name_or_path in meta-llama/Llama-2-7b-hf codellama/CodeLlama-7b-Instru
         --evaluation_strategy=steps \
         --eval_steps=${eval_steps} \
         --save_steps=${eval_steps} \
-        --save_total_limit=5 \
+        --save_total_limit=1 \
         --learning_rate=${lr} \
         --weight_decay=${wd} \
         --warmup_ratio=0.03 \

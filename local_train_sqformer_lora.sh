@@ -17,11 +17,12 @@ wd=0.05
 eval_steps=500
 master_port=29500
 strategy=v2.6
-num_query_tokens=0
+num_query_tokens=10
 cross_attention_freq=1
 finetuning_type=lora
 
 dataset_dir=data/WTQ_Mistral
+# dataset_dir=data/5Task_Mistral
 
 wandb online
 
@@ -34,18 +35,18 @@ model_name_or_path=TIGER-Lab/StructLM-7B-Mistral
 # model_name_or_path=codellama/CodeLlama-7b-Instruct-hf
         # --gradient_checkpointing \
 
-for strategy in v2.6 ; do
+for num_query_tokens in 0 10 ; do
 
     model_name=$(basename "$model_name_or_path")
 
-        # --do_train \
-        # --gradient_checkpointing \
-        # --finetuning_type=${finetuning_type} \
-        # --overwrite_output_dir \
-        # --deepspeed=${deepspeed_config_file} \
-        # --do_eval \
-    deepspeed --include localhost:0,1,2,3 --master_port=${master_port} StructQformer/train_sqformer.py \
+    deepspeed --include localhost:1,2,3,4 --master_port=${master_port} StructQformer/train_sqformer.py \
         --model_name_or_path=${model_name_or_path} \
+        --do_train \
+        --gradient_checkpointing \
+        --finetuning_type=${finetuning_type} \
+        --overwrite_output_dir \
+        --deepspeed=${deepspeed_config_file} \
+        --do_eval \
         --do_predict \
         --bf16 \
         --strategy=${strategy} \
@@ -64,7 +65,7 @@ for strategy in v2.6 ; do
         --evaluation_strategy=steps \
         --eval_steps=${eval_steps} \
         --save_steps=${eval_steps} \
-        --save_total_limit=2 \
+        --save_total_limit=1 \
         --learning_rate=${lr} \
         --weight_decay=${wd} \
         --warmup_ratio=0.03 \

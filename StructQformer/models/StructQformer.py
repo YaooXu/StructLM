@@ -180,14 +180,13 @@ class StructQformerLLM(nn.Module):
             for name, param in self.llm.named_parameters():
                 param.requires_grad = True
         elif args.finetuning_type == 'lora':
-            self.llm.enable_input_require_grads()
             logger.info('loading lora model')
             peft_config = LoraConfig(
-                task_type=TaskType.CAUSAL_LM, 
+                task_type=TaskType.CAUSAL_LM,
                 inference_mode=False,
                 target_modules=args.target_modules.split(','),
-                r=8, 
-                lora_alpha=16, 
+                r=8,
+                lora_alpha=16,
                 lora_dropout=0.05
             )
             self.llm = get_peft_model(self.llm, peft_config)
@@ -197,7 +196,7 @@ class StructQformerLLM(nn.Module):
                 param.requires_grad = False
         else:
             raise NotImplementedError
-        
+
         if self.num_query_tokens > 0:
             self.qformer = StructQformer(args, hypergraph_enc_config)
 
@@ -234,7 +233,8 @@ class StructQformerLLM(nn.Module):
         self.llm.generation_config = value
 
     def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs):
-        self.llm.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        self.llm.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": False})
 
     def init_tokenizer_and_embeds(
         self,
@@ -287,12 +287,17 @@ class StructQformerLLM(nn.Module):
             new_inputs_embeds = torch.zeros_like(inputs_embeds).to(inputs_embeds.device)
             for i in range(batch_size):
                 # inputs_embeds[i][graph_pad_st_idx[i]: graph_pad_ed_idx[i]] = query_embeds[i]
-                new_inputs_embeds[i][:graph_pad_st_idx[i]] = inputs_embeds[i][:graph_pad_st_idx[i]]
-                new_inputs_embeds[i][graph_pad_st_idx[i]: graph_pad_ed_idx[i]] = query_embeds[i]
-                new_inputs_embeds[i][graph_pad_ed_idx[i]:] = inputs_embeds[i][graph_pad_ed_idx[i]:]
+                cur_inputs_embeds = inputs_embeds[i]
+                cur_new_inputs_embeds = new_inputs_embeds[i]
+                cur_graph_embeds = query_embeds[i]
+                cur_graph_pad_st_idx, cur_graph_pad_ed_idx = graph_pad_st_idx[i], graph_pad_ed_idx[i]
+
+                cur_new_inputs_embeds[:cur_graph_pad_st_idx] += cur_inputs_embeds[:cur_graph_pad_st_idx]
+                cur_new_inputs_embeds[cur_graph_pad_st_idx: cur_graph_pad_ed_idx] += cur_graph_embeds
+                cur_new_inputs_embeds[cur_graph_pad_ed_idx:] += cur_inputs_embeds[cur_graph_pad_ed_idx:]
         else:
             new_inputs_embeds = inputs_embeds
-            
+
         return new_inputs_embeds
 
     def forward(

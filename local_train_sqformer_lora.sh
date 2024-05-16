@@ -14,14 +14,14 @@ max_seq_length=2560
 num_train_epochs=3
 lr=2e-5
 wd=0.05
-eval_steps=500
+eval_steps=1000
 master_port=29500
 strategy=v2.6
 num_query_tokens=10
 cross_attention_freq=1
 finetuning_type=lora
 
-dataset_dir=data/WTQ_Mistral
+dataset_dir=data/WTQ_Mistral_Tabert
 # dataset_dir=data/5Task_Mistral
 
 wandb online
@@ -35,7 +35,7 @@ model_name_or_path=TIGER-Lab/StructLM-7B-Mistral
 # model_name_or_path=codellama/CodeLlama-7b-Instruct-hf
         # --gradient_checkpointing \
 
-for num_query_tokens in 0 10 ; do
+for num_query_tokens in 10 0 ; do
 
     model_name=$(basename "$model_name_or_path")
 

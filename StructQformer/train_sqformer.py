@@ -163,7 +163,7 @@ if __name__ == "__main__":
 
     bert_tokenizer = AutoTokenizer.from_pretrained(model_args.encoder_model_path, use_fast=False)
     bert_tokenizer.add_tokens(
-        ["[TAB]", "[HEAD]", "[CELL]", "[ROW]", "scinotexp"], special_tokens=True
+        ["[HEAD]", "[CELL]", "[ROW]"], special_tokens=True
     )
 
     hypergraph_enc_config = AutoConfig.from_pretrained(model_args.encoder_model_path)
@@ -178,6 +178,7 @@ if __name__ == "__main__":
 
     model = StructQformerLLM(model_args, hypergraph_enc_config,
                              llm_tokenizer,
+                             bert_tokenizer,
                              use_cache=False if training_args.gradient_checkpointing else True,
                              torch_dtype=torch_dtype)
 

@@ -14,14 +14,14 @@ max_seq_length=2560
 num_train_epochs=3
 lr=2e-5
 wd=0.05
-eval_steps=500
+eval_steps=5000
 master_port=29501
 strategy=v2.6
 num_query_tokens=10
 cross_attention_freq=1
 finetuning_type=freeze_backbone
 
-dataset_dir=data/WTQ_Mistral
+dataset_dir=data/5Task_Mistral
 
 
 wandb online
@@ -35,7 +35,7 @@ model_name_or_path=TIGER-Lab/StructLM-7B-Mistral
 # model_name_or_path=codellama/CodeLlama-7b-Instruct-hf
         # --gradient_checkpointing \
 
-for num_query_tokens in 8 16 32 64; do
+for num_query_tokens in 10; do
 
     model_name=$(basename "$model_name_or_path")
 
@@ -54,7 +54,7 @@ for num_query_tokens in 8 16 32 64; do
         --max_seq_length=${max_seq_length} \
         --cross_attention_freq=${cross_attention_freq} \
         --dataset_dir=${dataset_dir} \
-        --output_dir=./outputs/${dataset_dir}/${model_name}_${finetuning_type}_${strategy}_${max_desc_length}_${max_seq_length}_${num_query_tokens}_${cross_attention_freq}_${wd}_${lr} \
+        --output_dir=/mnt/userdata/StructLM/outputs/${dataset_dir}/${model_name}_${finetuning_type}_${strategy}_${max_desc_length}_${max_seq_length}_${num_query_tokens}_${cross_attention_freq}_${wd}_${lr} \
         --seed=0 \
         --num_train_epochs=${num_train_epochs} \
         --per_device_train_batch_size=2 \

@@ -1,15 +1,19 @@
-import random
 import sys
+sys.path.append('./')
+
+import random
 import os
+from multiprocessing import Pool
 
 import json
 import pickle
 import re
+import time
 
 import pandas as pd
 import torch
 from tqdm import tqdm
-from utils.utils import load_json
+from utils.utils import load_json, write_jsonl
 
 from collections import defaultdict
 from torch_geometric.data import Data
@@ -221,17 +225,66 @@ class TableConverter:
         return bigraph
 
 
+def obtain_samples(process_idx, idxes_to_process):
+    new_samples = []
+    tasks_to_n = defaultdict(int)
+    t1 = time.time()
+    for n, idx in enumerate(idxes_to_process):
+        if (n + 1) % 100 == 0:
+            t2 = time.time()
+            print(f"{process_idx}: {n / len(idxes_to_process)}, {t2 - t1}")
+            t1 = t2
+
+        sample = samples[idx]
+
+        if "test" in path:
+            question = sample["question"] if 'question' in sample else sample['statement']
+            table = sample["struct_in"]
+            sample['label'] = sample['seq_out']
+            sample['inst'] = re.findall(
+                r"([\s\S]*table:\n\n)", sample["formatted_input"])[0]
+        else:
+            question = re.findall(
+                r"(question|statement):\n\n(.*)", sample["input"])[0][1]
+            table = re.findall(r"table:\n\n([\s\S]*)\n\n\n", sample["input"])[0]
+            # sys_prompt = '<<SYS>>\n' + sample['sys_prompt'] + '\n<</SYS>>\n\n'
+            sys_prompt = 'Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.\n\n### Instruction:\n\n\n'
+            sample["inst"] = sys_prompt + re.findall(
+                r"([\s\S]*table:\n\n)", sample["input"])[0][0]
+
+        print(sample['inst'])
+        print(table)
+        print(question)
+        print(sample['label'])
+
+        sample["question"] = question
+
+        graph = converter._text2graph(table, True)
+        if graph:
+            sample["struct_in"] = table
+            new_samples.append(sample)
+
+            if "test" in path:
+                tasks_to_n[sample["description"]] += 1
+            else:
+                tasks_to_n[sample["task_name"]] += 1
+
+    print(tasks_to_n)
+
+    return new_samples
+
+
 if __name__ == "__main__":
 
-    path = "data/processed/skginstruct.json"
-    tab_tasks = ['tabmwp', 'hybridqa', 'tab_fact', 'wikitq', 'wikisql', 'fetaqa']
-    tab_tasks = ['tabmwp']
+    output_dir = 'WTQ_Mistral'
+    
+    # path = "data/processed/skginstruct_skgonly.json"
+    # tab_tasks = ['tab_fact', 'wikitq', 'wikisql', 'tabmwp', 'fetaqa']
+    # tab_tasks = ['wikitq']
 
-    # path = "data/processed/skginstruct_test_file_13b_34b.json"
-    # path = "data/processed/skginstruct_test_file_7b.json"
-    # tab_tasks = ['task: tabmwp', 'task: hybridqa', 'task: tabfact',
-    #              'task: wiki table question', 'task: wikisql', 'task: fetaqa']
-    # tab_tasks = ['task: wiki table question']
+    path = "data/processed/skginstruct_test_file_mistral.json"
+    tab_tasks = ['task: tabfact', 'task: wiki table question', 'task: wikisql']
+    tab_tasks = ['task: wiki table question']
     all_samples = load_json(path)
 
     tasks_to_samples = defaultdict(list)
@@ -240,12 +293,14 @@ if __name__ == "__main__":
             tasks_to_samples[sample["description"]].append(sample)
         else:
             tasks_to_samples[sample["task_name"]].append(sample)
+    print(list(tasks_to_samples.keys()))
 
     samples = []
     for task in tab_tasks:
         samples.extend(tasks_to_samples[task])
 
-    print(len(samples))
+    num_samples = len(samples)
+    print(num_samples)
 
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
     new_tokens = ["[TAB]", "[HEAD]", "[CELL]", "[ROW]", "scinotexp"]
@@ -253,46 +308,39 @@ if __name__ == "__main__":
 
     converter = TableConverter(tokenizer)
 
+    n_process = 32
+    with Pool(processes=n_process) as pool:
+        num_samples_in_chunk = num_samples // n_process
+        jobs = []
+        st = 0
+        for i in range(n_process):
+            ed = st + num_samples_in_chunk
+            ed = min(ed, num_samples)
+            jobs.append([i, list(range(st, ed))])
+            st = ed
+
+        results = pool.starmap(obtain_samples, jobs)
+
     new_samples = []
-    for sample in tqdm(samples):
-        if "test" in path:
-            question = sample["question"] if 'question' in sample else sample['statement']
-            table = sample["struct_in"]
-            sample['label'] = sample['seq_out']
-            sample['inst'] = re.findall(
-                r"(<<SYS>>[\s\S]*table:\n\n)", sample["formatted_input"])[0]
-        else:
-            question = re.findall(
-                r"(question|statement):\n\n(.*)", sample["input"])[0][1]
-            table = re.findall(r"table:\n\n([\s\S]*)\n\n\n", sample["input"])[0]
-            sys_prompt = '<<SYS>>\n' + sample['sys_prompt'] + '\n<</SYS>>\n\n'
-            sample["inst"] = sys_prompt + re.findall(
-                r"([\s\S]*table:\n\n)", sample["input"])[0]
+    for samples in results:
+        new_samples.extend(samples)
 
-        # print(sample['inst'])
-
-        sample["question"] = question
-
-        graph = converter._text2graph(table)
-        if graph:
-            sample["struct_in"] = table
-            new_samples.append(sample)
-
-    print(len(new_samples), len(samples))
+    random.shuffle(new_samples)
     if "test" in path:
-        with open(f"data/TAB_SYS_PROPMT/test.jsonl", "w") as f:
-            for sample in new_samples:
-                f.write(json.dumps(sample) + "\n")
-    else:
-        random.shuffle(new_samples)
-        num_train_samples = int(len(new_samples) * 0.95)
-        train, val = (
-            new_samples[:num_train_samples],
-            new_samples[num_train_samples:],
-        )
+        write_jsonl(f"data/{output_dir}/ori_test.jsonl", new_samples)
+        write_jsonl(f"data/{output_dir}/ori_val.jsonl", new_samples[:1000])
 
-        for dataset, name in zip([train, val], ["train", "val"]):
-            with open(f"data/TAB_SYS_PROPMT/{name}.jsonl", "w") as f:
+        remain_keys = ['label', 'question', 'inst', 'struct_in']
+        samples = []
+        for sample in new_samples:
+            samples.append({k: sample[k] for k in remain_keys})
+        write_jsonl(f"data/{output_dir}/test.jsonl", samples)
+        write_jsonl(f"data/{output_dir}/val.jsonl", samples[:1000])
+    else:
+        train = new_samples
+
+        for dataset, name in zip([train], ["train"]):
+            with open(f"data/{output_dir}/{name}.jsonl", "w") as f:
                 for sample in dataset:
                     f.write(json.dumps(sample) + "\n")
 

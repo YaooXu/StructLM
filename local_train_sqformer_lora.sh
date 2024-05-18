@@ -35,7 +35,7 @@ model_name_or_path=TIGER-Lab/StructLM-7B-Mistral
 # model_name_or_path=codellama/CodeLlama-7b-Instruct-hf
         # --gradient_checkpointing \
 
-for num_query_tokens in 0 10 ; do
+for num_query_tokens in 10 ; do
 
     model_name=$(basename "$model_name_or_path")
 
@@ -55,7 +55,7 @@ for num_query_tokens in 0 10 ; do
         --max_seq_length=${max_seq_length} \
         --cross_attention_freq=${cross_attention_freq} \
         --dataset_dir=${dataset_dir} \
-        --output_dir=./outputs/${dataset_dir}/new_input_embeds_${model_name}_${finetuning_type}_${strategy}_${max_desc_length}_${max_seq_length}_${num_query_tokens}_${cross_attention_freq}_${wd}_${lr} \
+        --output_dir=/data/yaoxu/StructLM/outputs/${dataset_dir}/new_input_embeds_${model_name}_${finetuning_type}_${strategy}_${max_desc_length}_${max_seq_length}_${num_query_tokens}_${cross_attention_freq}_${wd}_${lr} \
         --seed=0 \
         --num_train_epochs=${num_train_epochs} \
         --per_device_train_batch_size=1 \

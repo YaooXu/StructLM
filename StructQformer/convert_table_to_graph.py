@@ -276,11 +276,12 @@ def obtain_samples(process_idx, idxes_to_process):
 
 if __name__ == "__main__":
 
-    output_dir = 'WTQ_Mistral'
-    
-    # path = "data/processed/skginstruct_skgonly.json"
-    # tab_tasks = ['tab_fact', 'wikitq', 'wikisql', 'tabmwp', 'fetaqa']
-    # tab_tasks = ['wikitq']
+    output_dir = 'WTQ_Mistral_new'
+    os.makedirs(f'data/{output_dir}', exist_ok=True)
+
+    path = "data/processed/skginstruct_skgonly.json"
+    tab_tasks = ['tab_fact', 'wikitq', 'wikisql', 'tabmwp', 'fetaqa']
+    tab_tasks = ['wikitq']
 
     path = "data/processed/skginstruct_test_file_mistral.json"
     tab_tasks = ['task: tabfact', 'task: wiki table question', 'task: wikisql']
@@ -303,7 +304,7 @@ if __name__ == "__main__":
     print(num_samples)
 
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-    new_tokens = ["[TAB]", "[HEAD]", "[CELL]", "[ROW]", "scinotexp"]
+    new_tokens = ["[HEAD]", "[CELL]", "[ROW]"]
     tokenizer.add_tokens(new_tokens, special_tokens=True)
 
     converter = TableConverter(tokenizer)

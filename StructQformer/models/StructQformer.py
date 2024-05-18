@@ -200,23 +200,23 @@ class StructQformerLLM(nn.Module):
         if self.num_query_tokens > 0:
             self.qformer = StructQformer(args, hypergraph_enc_config)
 
-            if self.qformer.hypergraph_encoder:
-                # load graph encoder
-                logger.info(f"loading hypergraph_encoder ckpt")
-                state_dict = torch.load(
-                    open(
-                        'models/ckpts/hytrel/mp_rank_00_model_states.pt',
-                        "rb",
-                    )
-                )
+            # if self.qformer.hypergraph_encoder:
+            #     # load graph encoder
+            #     logger.info(f"loading hypergraph_encoder ckpt")
+            #     state_dict = torch.load(
+            #         open(
+            #             'models/ckpts/hytrel/mp_rank_00_model_states.pt',
+            #             "rb",
+            #         )
+            #     )
 
-                new_state_dict = OrderedDict()
-                logger.info(f"loading graph encoder")
-                for k, v in state_dict["module"].items():
-                    if "model" in k:
-                        name = k[13:]  # remove `module.model.`
-                        new_state_dict[name] = v
-                self.qformer.hypergraph_encoder.load_state_dict(new_state_dict, strict=True)
+            #     new_state_dict = OrderedDict()
+            #     logger.info(f"loading graph encoder")
+            #     for k, v in state_dict["module"].items():
+            #         if "model" in k:
+            #             name = k[13:]  # remove `module.model.`
+            #             new_state_dict[name] = v
+            #     self.qformer.hypergraph_encoder.load_state_dict(new_state_dict, strict=True)
         else:
             self.qformer = None
 

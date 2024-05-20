@@ -13,6 +13,7 @@ from transformers import (
     AutoModel,
 )
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
+from StructQformer.models.graphormer.graphormer import Graphormer
 
 from models.hytrel import HyperGraphEncoder
 
@@ -47,8 +48,9 @@ class StructQformer(nn.Module):
         self.encoder_config.cross_attention_freq = self.cross_attention_freq
         self.encoder_config.query_length = self.num_query_tokens
         if self.strategy[:2] == "v2":
-            self.hypergraph_encoder = HyperGraphEncoder(hypergraph_enc_config)
-
+            # self.hypergraph_encoder = HyperGraphEncoder(hypergraph_enc_config)
+            self.graph_encoder = Graphormer(args.encoder_model_path)
+            
             self.model = BertLMHeadModel.from_pretrained(
                 self.encoder_model_path, config=self.encoder_config
             )
@@ -81,8 +83,9 @@ class StructQformer(nn.Module):
                         module.bias.data.zero_()
 
     def resize_token_embeddings(self, new_num_tokens):
-        if self.model is not None:
-            self.model.resize_token_embeddings(new_num_tokens)
+        self.graph_encoder.model.resize_token_embeddings(new_num_tokens)
+        # if self.model is not None:
+        #     self.model.resize_token_embeddings(new_num_tokens)
 
     @property
     def base_model(self):
@@ -111,18 +114,21 @@ class StructQformer(nn.Module):
         if self.args.skip_graph_encoder:
             query_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
         else:
-            graph_embeds = self.hypergraph_encoder(graph["graph"])
+            graph_embeds = self.graph_encoder(graph['graph'])
+            graph_attention_mask = graph['graph']["graph_attention_mask"]
+            
+            # graph_embeds = self.hypergraph_encoder(graph["graph"])
 
-            idxes = graph["graph"]["ptr"].tolist()
-            list_graph_embeds = []
-            list_graph_attn = []
-            for i in range(len(idxes) - 1):
-                list_graph_embeds.append(graph_embeds[0][idxes[i]: idxes[i + 1], :])
-                list_graph_attn.append(torch.LongTensor([1] * (idxes[i + 1] - idxes[i])))
-            graph_embeds = torch.nn.utils.rnn.pad_sequence(list_graph_embeds, batch_first=True)
-            graph_attention_mask = torch.nn.utils.rnn.pad_sequence(
-                list_graph_attn, batch_first=True
-            ).to(graph_embeds.device)
+            # idxes = graph["graph"]["ptr"].tolist()
+            # list_graph_embeds = []
+            # list_graph_attn = []
+            # for i in range(len(idxes) - 1):
+            #     list_graph_embeds.append(graph_embeds[0][idxes[i]: idxes[i + 1], :])
+            #     list_graph_attn.append(torch.LongTensor([1] * (idxes[i + 1] - idxes[i])))
+            # graph_embeds = torch.nn.utils.rnn.pad_sequence(list_graph_embeds, batch_first=True)
+            # graph_attention_mask = torch.nn.utils.rnn.pad_sequence(
+            #     list_graph_attn, batch_first=True
+            # ).to(graph_embeds.device)
 
             question_embeds = self.model.bert.embeddings(question_ids)
             # add ln and dp
@@ -160,7 +166,7 @@ class StructQformer(nn.Module):
 
 
 class StructQformerLLM(nn.Module):
-    def __init__(self, args, hypergraph_enc_config, llm_tokenizer, **kwargs) -> None:
+    def __init__(self, args, hypergraph_enc_config, llm_tokenizer, bert_tokenizer, **kwargs) -> None:
         super().__init__()
 
         self.num_query_tokens = args.num_query_tokens
@@ -174,7 +180,7 @@ class StructQformerLLM(nn.Module):
             args.model_name_or_path,
             **kwargs
         )
-        self.init_tokenizer_and_embeds(llm_tokenizer, DEFAULT_GRAPH_PAD_TOKEN)
+        self.init_tokenizer_and_embeds(llm_tokenizer, bert_tokenizer, DEFAULT_GRAPH_PAD_TOKEN)
 
         if args.finetuning_type == 'full':
             for name, param in self.llm.named_parameters():
@@ -191,6 +197,11 @@ class StructQformerLLM(nn.Module):
             )
             self.llm = get_peft_model(self.llm, peft_config)
             self.llm.print_trainable_parameters()
+            
+            if args.ckpt_path is not None:
+                logger.info(f'loading lora ckpt from {args.ckpt_path}')
+                self.llm.load_adapter(args.ckpt_path)
+                
         elif args.finetuning_type == 'freeze_backbone':
             for name, param in self.llm.named_parameters():
                 param.requires_grad = False
@@ -199,7 +210,13 @@ class StructQformerLLM(nn.Module):
 
         if self.num_query_tokens > 0:
             self.qformer = StructQformer(args, hypergraph_enc_config)
+            qformer = self.qformer
 
+            bert_tokenizer.add_tokens(["[TAB]", "[HEAD]", "[CELL]", "[ROW]", "scinotexp"], special_tokens=True)
+            self.bert_graph_pad_token = bert_tokenizer.convert_tokens_to_ids([DEFAULT_GRAPH_PAD_TOKEN])[
+                0
+            ]
+            qformer.resize_token_embeddings(len(bert_tokenizer))
             # if self.qformer.hypergraph_encoder:
             #     # load graph encoder
             #     logger.info(f"loading hypergraph_encoder ckpt")
@@ -217,6 +234,7 @@ class StructQformerLLM(nn.Module):
             #             name = k[13:]  # remove `module.model.`
             #             new_state_dict[name] = v
             #     self.qformer.hypergraph_encoder.load_state_dict(new_state_dict, strict=True)
+
         else:
             self.qformer = None
 
@@ -239,16 +257,10 @@ class StructQformerLLM(nn.Module):
     def init_tokenizer_and_embeds(
         self,
         llm_tokenizer: AutoTokenizer,
+        bert_tokenizer,
         graph_pad_token=DEFAULT_GRAPH_PAD_TOKEN,
     ):
         llm = self.llm
-        # qformer = self.qformer
-
-        # bert_tokenizer.add_tokens(["[TAB]", "[HEAD]", "[CELL]", "[ROW]", "scinotexp"], special_tokens=True)
-        # self.bert_graph_pad_token = bert_tokenizer.convert_tokens_to_ids([DEFAULT_GRAPH_PAD_TOKEN])[
-        #     0
-        # ]
-        # qformer.resize_token_embeddings(len(bert_tokenizer))
 
         llm_tokenizer.add_tokens([graph_pad_token], special_tokens=True)
         if llm_tokenizer.pad_token is None:

@@ -3,6 +3,7 @@ import os
 import random
 import re
 import time
+import pandas as pd
 
 import torch
 import importlib
@@ -22,6 +23,8 @@ from utils.trainer import LlamaSeq2SeqTrainer
 from utils.training_arguments import WrappedSeq2SeqTrainingArguments
 import json
 from vllm import LLM
+
+from utils.utils import load_jsonl
 
 # Huggingface realized the "Seq2seqTrainingArguments" which is the same with "WrappedSeq2SeqTrainingArguments"
 # in transformers==4.10.1 during our work.
@@ -49,13 +52,15 @@ def main() -> None:
 
     logging.info(f"loading test data from file {args.dataset.test_split_json}")
     assert args.dataset.test_split_json is not None, "Please specify the test split json file."
-    with open(args.dataset.test_split_json) as f:
-        seq2seq_test_dataset = json.load(f)
-        seq2seq_test_dataset = [
-            sample for sample in seq2seq_test_dataset if sample["description"] == "task: wiki table question"
-            # sample for sample in seq2seq_test_dataset if sample["description"] == "task: compwebq"
-        ][:100]
-            
+    if args.dataset.test_split_json.endswith('json'):
+        with open(args.dataset.test_split_json) as f:
+            seq2seq_test_dataset = json.load(f)
+    else:
+        seq2seq_test_dataset = load_jsonl(args.dataset.test_split_json)
+    seq2seq_test_dataset = [
+        sample for sample in seq2seq_test_dataset if sample["description"] in ['task: tabfact', 'task: wiki table question', 'task: wikisql']
+    ]
+    
     test_dataset = (
         TokenizedTestDataset(args, training_args, model_tokenizer, seq2seq_test_dataset)
         if seq2seq_test_dataset

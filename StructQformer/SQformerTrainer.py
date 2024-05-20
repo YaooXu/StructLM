@@ -1,6 +1,6 @@
 import easydict
 from transformers.trainer_utils import PredictionOutput, speed_metrics
-from SQformer_dataset import DataCollatorForGenerating, DataCollatorForGraphSupervisedDataset
+from SQformer_dataset_tabert import DataCollatorForGenerating, DataCollatorForGraphSupervisedDataset
 import wandb
 from transformers import Seq2SeqTrainer
 from transformers.integrations import WandbCallback

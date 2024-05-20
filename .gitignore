@@ -10,3 +10,4 @@ wandb
 *outputs/
 .vscode
 nohup*
+tmp*

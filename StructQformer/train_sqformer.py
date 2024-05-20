@@ -2,7 +2,6 @@ import random
 import sys
 sys.path.append("./")
 
-import multiprocess
 import os
 from peft.tuners.lora import LoraLayer
 from transformers.trainer_utils import PredictionOutput
@@ -14,7 +13,7 @@ from transformers import (
     set_seed,
 )
 from StructQformer.models import StructQformerLLM
-from StructQformer.SQformer_dataset import (
+from StructQformer.SQformer_dataset_tabert import (
     DEFAULT_GRAPH_PAD_TOKEN,
     DataCollatorForGenerating,
     DataCollatorForGraphSupervisedDataset,
@@ -60,7 +59,8 @@ class ModelArguments:
 
     skip_graph_encoder: bool = field(default=False)
 
-    qformer_ckpt_path: str = field(default=None)
+    ckpt_path: str = field(default=None)
+
 
 @dataclass
 class DataArguments:
@@ -178,12 +178,13 @@ if __name__ == "__main__":
 
     model = StructQformerLLM(model_args, hypergraph_enc_config,
                              llm_tokenizer,
+                             bert_tokenizer,
                              use_cache=False if training_args.gradient_checkpointing else True,
                              torch_dtype=torch_dtype)
 
-    if model_args.qformer_ckpt_path is not None:
-        logger.info(f"loading qformer ckpt from {model_args.qformer_ckpt_path}")
-        model.qformer.load_state_dict(torch.load(model_args.qformer_ckpt_path))
+    if model_args.ckpt_path is not None:
+        logger.info(f"loading qformer ckpt from {model_args.ckpt_path}")
+        model.qformer.load_state_dict(torch.load(os.path.join(model_args.ckpt_path, "Qformer.bin")))
 
     # for name, module in model.named_modules():
     #     if isinstance(module, LoraLayer):
@@ -236,7 +237,7 @@ if __name__ == "__main__":
             training=False,
         )
         test_examples = load_jsonl(dataset_dir / f"ori_test.jsonl")
-        
+
         # for debug
         # idxes = random.sample(range(len(test_examples)), k=1000)
         # test_dataset = test_dataset.select(idxes)
@@ -265,7 +266,7 @@ if __name__ == "__main__":
             trainer.train(resume_from_checkpoint=True)
         else:
             trainer.train()
-            
+
     elif training_args.do_predict:
         trainer.data_collator = DataCollatorForGenerating(llm_tokenizer)
         logger.info("*** Predict ***")

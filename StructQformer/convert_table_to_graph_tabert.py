@@ -1,24 +1,26 @@
+import random
 import sys
+import time
+
+import numpy as np
 sys.path.append('./')
 
-import random
 import os
-from multiprocessing import Pool
 
 import json
 import pickle
 import re
-import time
 
 import pandas as pd
 import torch
 from tqdm import tqdm
 from utils.utils import load_json, write_jsonl
 
-from collections import defaultdict
+from collections import defaultdict, deque
 from torch_geometric.data import Data
 from easydict import EasyDict
 from transformers import AutoTokenizer
+from multiprocessing import Pool
 
 # constants
 CAP_TAG = "<caption>"
@@ -42,6 +44,49 @@ class BipartiteData(Data):
             return torch.tensor([[self.x_s.size(0)], [self.x_t.size(0)]])
         else:
             return super().__inc__(key, value, *args, **kwargs)
+
+
+def construct_graph_from_edge_index(edge_index):
+    graph = defaultdict(list)
+
+    for h, t in zip(edge_index[0], edge_index[1]):
+        graph[h].append(t)
+        graph[t].append(h)
+
+    return graph
+
+
+def bfs(source, graph, num_nodes):
+    dist = [-1] * num_nodes
+
+    visited = {source}
+    dist[source] = 0
+
+    queue = deque([source])
+
+    while queue:
+        u = queue.popleft()
+        for v in graph[u]:
+            if v not in visited:
+                queue.append(v)
+                visited.add(v)
+                dist[v] = dist[u] + 1
+
+    return dist
+
+
+def _get_dist_mat(num_nodes, edge_index):
+    # # get shortest distance between two nodes
+
+    graph = construct_graph_from_edge_index(edge_index)
+
+    dist_mat = np.zeros((num_nodes, num_nodes))
+
+    for i in range(num_nodes):
+        dist = bfs(i, graph, num_nodes)
+        dist_mat[i] = dist
+
+    return dist_mat
 
 
 class TableConverter:
@@ -78,7 +123,7 @@ class TableConverter:
             res = re.sub(number_pattern, number_repl, line)
             return res
 
-        word = apply_scientific_notation(word)
+        # word = apply_scientific_notation(word)
         wordpieces = self.tokenizer.tokenize(word)[: self.data_args.max_token_length]
 
         mask = [1 for _ in range(len(wordpieces))]
@@ -99,130 +144,97 @@ class TableConverter:
 
         return cap, headers, cells
 
-    def _text2graph(self, table_str, return_dict=False):
+    def _text2graph(self, table_str, get_dist_mat=True):
+
         table_str = table_str.replace("col :", "<caption> [TAB] <header>")
         table_str = re.sub(r"row\s\d+\s:", "<row>", table_str)
+
         try:
             cap, headers, data = self._text2table(table_str)
+
+            # filter too long caption
+            cap = " ".join(cap.split()[: self.data_args.max_token_length])
+            header = [" ".join(h.split()[: self.data_args.max_token_length]) for h in headers][
+                : self.data_args.max_column_length
+            ]
+            data = [
+                row[: self.data_args.max_column_length] for row in data[: self.data_args.max_row_length]
+            ]
+
+            assert len(header) <= self.data_args.max_column_length
+            assert len(data[0]) == len(header)
+            assert len(data) <= self.data_args.max_row_length
+
+            wordpieces_all, mask_all = [], []
+            node_types, edge_index = [], []
+
+            for head in header:
+                if not head:
+                    wordpieces = ["[HEAD]"] + [
+                        "[PAD]" for _ in range(self.data_args.max_token_length - 1)
+                    ]
+                    mask = [1] + [0 for _ in range(self.data_args.max_token_length - 1)]
+                    wordpieces_all.append(wordpieces)
+                    mask_all.append(mask)
+                else:
+                    wordpieces, mask = self._tokenize_word(head)
+                    wordpieces_all.append(wordpieces)
+                    mask_all.append(mask)
+                node_types.append(0)
+
+            for row_i, row in enumerate(data):
+
+                # ROW node
+                row_node_id = len(wordpieces_all)
+                wordpieces = ["[ROW]"] + \
+                    ["[PAD]" for _ in range(self.data_args.max_token_length - 1)]
+                mask = [1] + [0 for _ in range(self.data_args.max_token_length - 1)]
+                wordpieces_all.append(wordpieces)
+                mask_all.append(mask)
+                node_types.append(1)
+
+                for col_i, word in enumerate(row):
+                    col_node_id = col_i
+
+                    if word.strip() in ['-', '']:
+                        wordpieces = ["[CELL]"] + [
+                            "[PAD]" for _ in range(self.data_args.max_token_length - 1)
+                        ]
+                        mask = [1] + [0 for _ in range(self.data_args.max_token_length - 1)]
+                    else:
+                        word = " ".join(word.split()[: self.data_args.max_token_length])
+                        wordpieces, mask = self._tokenize_word(word)
+
+                    node_id = len(wordpieces_all)
+                    wordpieces_all.append(wordpieces)
+                    mask_all.append(mask)
+                    node_types.append(2)
+
+                    edge_index.append([node_id, col_node_id])
+                    edge_index.append([col_node_id, node_id])
+
+                    edge_index.append([node_id, row_node_id])
+                    edge_index.append([row_node_id, node_id])
+
+            node_token_ids = torch.tensor(
+                [self.tokenizer.convert_tokens_to_ids(x) for x in wordpieces_all], dtype=torch.long
+            )
+            edge_index = np.array(edge_index).T
+            node_types = np.array(node_types)
+            graph = {
+                "edge_index": edge_index,
+                'node_token_ids': node_token_ids,
+                "node_types": node_types,
+            }
+            if get_dist_mat:
+                dist_mat = _get_dist_mat(len(wordpieces_all), edge_index)
+                graph['dist_mat'] = dist_mat
+
+            return graph
         except:
             print("Fail to parser the table...")
             # cap, headers, data = self._text2table(table_str)
             return None
-
-        cap = " ".join(cap.split()[: self.data_args.max_token_length])  # filter too long caption
-        header = [" ".join(h.split()[: self.data_args.max_token_length]) for h in headers][
-            : self.data_args.max_column_length
-        ]
-        data = [
-            row[: self.data_args.max_column_length] for row in data[: self.data_args.max_row_length]
-        ]
-
-        assert len(header) <= self.data_args.max_column_length
-        assert len(data[0]) == len(header)
-        assert len(data) <= self.data_args.max_row_length
-
-        wordpieces_xs_all, mask_xs_all = [], []
-        wordpieces_xt_all, mask_xt_all = [], []
-        nodes, edge_index = [], []
-
-        # caption to hyper-edge (t node)
-        if not cap:
-            wordpieces = ["[TAB]"] + ["[PAD]" for _ in range(self.data_args.max_token_length - 1)]
-            mask = [1] + [0 for _ in range(self.data_args.max_token_length - 1)]
-            wordpieces_xt_all.append(wordpieces)
-            mask_xt_all.append(mask)
-        else:
-            wordpieces, mask = self._tokenize_word(cap)
-            wordpieces_xt_all.append(wordpieces)
-            mask_xt_all.append(mask)
-
-        # header to hyper-edge (t node)
-        for head in header:
-            if not head:
-                wordpieces = ["[HEAD]"] + [
-                    "[PAD]" for _ in range(self.data_args.max_token_length - 1)
-                ]
-                mask = [1] + [0 for _ in range(self.data_args.max_token_length - 1)]
-                wordpieces_xt_all.append(wordpieces)
-                mask_xt_all.append(mask)
-            else:
-                wordpieces, mask = self._tokenize_word(head)
-                wordpieces_xt_all.append(wordpieces)
-                mask_xt_all.append(mask)
-
-        # row to hyper edge (t node)
-        for i in range(len(data)):
-            wordpieces = ["[ROW]"] + ["[PAD]" for _ in range(self.data_args.max_token_length - 1)]
-            mask = [1] + [0 for _ in range(self.data_args.max_token_length - 1)]
-            wordpieces_xt_all.append(wordpieces)
-            mask_xt_all.append(mask)
-
-        # cell to nodes (s node)
-        for row_i, row in enumerate(data):
-            for col_i, word in enumerate(row):
-                if not word:
-                    wordpieces = ["[CELL]"] + [
-                        "[PAD]" for _ in range(self.data_args.max_token_length - 1)
-                    ]
-                    mask = [1] + [0 for _ in range(self.data_args.max_token_length - 1)]
-                else:
-                    word = " ".join(word.split()[: self.data_args.max_token_length])
-                    wordpieces, mask = self._tokenize_word(word)
-                wordpieces_xs_all.append(wordpieces)
-                mask_xs_all.append(mask)
-                node_id = len(nodes)
-                nodes.append(node_id)
-                edge_index.append([node_id, 0])  # connect to table-level hyper-edge
-                edge_index.append([node_id, col_i + 1])  # # connect to col-level hyper-edge
-                edge_index.append(
-                    [node_id, row_i + 1 + len(header)]
-                )  # connect to row-level hyper-edge
-
-        # add label
-        # label_ids = torch.zeros((len(header)-1, self.data_args.label_type_num), dtype=torch.float32)
-        # assert len(label_ids) == len(labels) == len(header) -1
-        col_mask = [0 for i in range(len(wordpieces_xt_all))]
-        col_mask[1: 1 + len(header)] = [1] * len(header)
-
-        # for col_i, lbl in enumerate(labels):
-        #     for lbl_i in lbl:
-        #         label_ids[col_i, lbl_i] = 1.0
-        #         pos_count[lbl_i] += 1
-
-        xs_ids = torch.tensor(
-            [self.tokenizer.convert_tokens_to_ids(x) for x in wordpieces_xs_all], dtype=torch.long
-        )
-        xt_ids = torch.tensor(
-            [self.tokenizer.convert_tokens_to_ids(x) for x in wordpieces_xt_all], dtype=torch.long
-        )
-
-        # check all 0 input
-        xs_tem = torch.count_nonzero(xs_ids, dim=1)
-        xt_tem = torch.count_nonzero(xt_ids, dim=1)
-        assert torch.count_nonzero(xs_tem) == len(xs_tem)
-        assert torch.count_nonzero(xt_tem) == len(xt_tem)
-        edge_index = torch.tensor(edge_index, dtype=torch.long).T
-
-        if not return_dict:
-            bigraph = BipartiteData(
-                edge_index=edge_index,
-                x_s=xs_ids,
-                x_t=xt_ids,
-                col_mask=col_mask,
-                num_nodes=len(xs_ids),
-                num_hyperedges=len(xt_ids),
-            )
-        else:
-            bigraph = dict(
-                edge_index=edge_index,
-                x_s=xs_ids,
-                x_t=xt_ids,
-                col_mask=col_mask,
-                num_nodes=len(xs_ids),
-                num_hyperedges=len(xt_ids),
-            )
-
-        return bigraph
 
 
 def obtain_samples(process_idx, idxes_to_process):
@@ -240,28 +252,6 @@ def obtain_samples(process_idx, idxes_to_process):
         if "test" in path:
             question = sample["question"] if 'question' in sample else sample['statement']
             table = sample["struct_in"]
-            
-            if shuffle:
-                df = pd.DataFrame(sample['table']['rows'], columns=sample['table']['header'])
-                # shuffle rows
-                df_shuffled = df.sample(frac=1).reset_index(drop=True)
-                
-                # shuffle cols
-                df_shuffled = df_shuffled.iloc[:, :].sample(frac=1, axis=1)
-                new_rows = ["col : " + " | ".join(df_shuffled.columns)]
-
-                for idx, row in df_shuffled.iterrows():
-                    row_str = "row {} : ".format(idx + 1) + " | ".join(map(str, row.values))
-                    new_rows.append(row_str)
-                new_struct_in = " ".join(new_rows).lower()
-                new_formatted_input = sample['formatted_input'].replace(sample['struct_in'], new_struct_in)
-
-                if len(new_struct_in) != len(sample['struct_in']):
-                    continue
-                
-                table = new_struct_in
-                sample['formatted_input'] = new_formatted_input
-                            
             sample['label'] = sample['seq_out']
             sample['inst'] = re.findall(
                 r"([\s\S]*table:\n\n)", sample["formatted_input"])[0]
@@ -291,23 +281,25 @@ def obtain_samples(process_idx, idxes_to_process):
             else:
                 tasks_to_n[sample["task_name"]] += 1
 
+    print(tasks_to_n)
+
     return new_samples
 
 
 if __name__ == "__main__":
 
-    output_dir = 'WTQ_Mistral_shuffle'
+    output_dir = 'WTQ_Mistral_Tabert'
+    os.makedirs(f'data/{output_dir}', exist_ok=True)
     n_process = 32
     shuffle = False
-    os.makedirs(f'data/{output_dir}', exist_ok=True)
 
-    # path = "data/processed/skginstruct_skgonly.json"
-    # tab_tasks = ['tab_fact', 'wikitq', 'wikisql', 'tabmwp', 'fetaqa']
-    # tab_tasks = ['wikitq']
+    path = "data/processed/skginstruct_skgonly.json"
+    tab_tasks = ['tab_fact', 'wikitq', 'wikisql', 'tabmwp', 'fetaqa']
+    tab_tasks = ['wikitq']
 
-    path = "data/processed/skginstruct_test_file_mistral.json"
-    tab_tasks = ['task: tabfact', 'task: wiki table question', 'task: wikisql']
-    tab_tasks = ['task: wiki table question']
+    # path = "data/processed/skginstruct_test_file_mistral.json"
+    # tab_tasks = ['task: tabfact', 'task: wiki table question', 'task: wikisql']
+    # tab_tasks = ['task: wiki table question']
     all_samples = load_json(path)
 
     tasks_to_samples = defaultdict(list)

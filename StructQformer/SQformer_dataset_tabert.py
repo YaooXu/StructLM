@@ -25,7 +25,7 @@ from torch_geometric.data.batch import Batch
 
 import torch.nn.functional as F
 import datasets
-from StructQformer.convert_table_to_graph import BipartiteData, TableConverter
+from StructQformer.convert_table_to_graph_tabert import BipartiteData, TableConverter, _get_dist_mat
 from utils.utils import load_json
 
 logger = logging.getLogger(__name__)
@@ -59,7 +59,7 @@ def merge_graph(graphs: List[Dict]):
                 torch.nn.utils.rnn.pad_sequence(node_token_ids, batch_first=True)
                 for node_token_ids in lists
             ]
-        elif key in ["node_types", "node_attrs", "graph_attention_mask"]:
+        elif key in ["node_types", "graph_attention_mask"]:
             key_to_array[key] = torch.nn.utils.rnn.pad_sequence(lists, batch_first=True)
         elif key == "dist_mat":
             dist_mat = [
@@ -114,7 +114,7 @@ def build_instruction_dataset(
         questions = []
         insts = []
         struct_ins = []
-        bi_graphs = []
+        graphs = []
 
         for label, question, inst, struct_in in zip(
             examples["label"], examples["question"], examples["inst"], examples["struct_in"]
@@ -130,7 +130,7 @@ def build_instruction_dataset(
             sources.append(source)
             targets.append(target)
             questions.append(question)
-            bi_graphs.append(converter._text2graph(struct_in, return_dict=True))
+            graphs.append(converter._text2graph(struct_in, True))
 
             # if shuffle_desc:
             #     node_texts = desc.split("\n")
@@ -189,11 +189,22 @@ def build_instruction_dataset(
         # for i in range(len(hist)):
         #     print(f"{int(bins[i])} -  {int(bins[i+1])}: {hist[i]}")
 
+        for i, graph in enumerate(graphs):
+            num_nodes = len(graph["node_types"])
+            
+            graph["node_types"] = torch.LongTensor(graph["node_types"])
+            graph["graph_attention_mask"] = torch.LongTensor([1] * num_nodes)
+            graph["node_token_ids"] = torch.LongTensor(graph["node_token_ids"])
+            
+            dist_mat = _get_dist_mat(num_nodes, graph["edge_index"])
+            # -1 -> 0
+            graph["dist_mat"] = torch.LongTensor(dist_mat) + 1
+
         results = {
             "input_ids": all_input_ids,
             "labels": all_labels,
             "question_ids": all_question_ids,
-            "graph": bi_graphs,
+            "graph": graphs,
         }
 
         return results
@@ -261,9 +272,9 @@ class DataCollatorForGraphSupervisedDataset(object):
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
         self._set_llm_padding_side()
 
-        graphs = [BipartiteData(**instance["graph"]) for instance in instances]
+        graphs = [instance["graph"] for instance in instances]
 
-        graphs = Batch.from_data_list(graphs)
+        graphs = merge_graph(graphs)
 
         # Qformer input
         question_ids = [instance["question_ids"] for instance in instances]
@@ -309,14 +320,14 @@ if __name__ == "__main__":
 
     set_seed(0)
 
-    dataset_dir = pathlib.Path("data/WTQ_Mistral")
+    dataset_dir = pathlib.Path("data/WTQ_Mistral_Tabert")
 
     llm_tokenizer = AutoTokenizer.from_pretrained("TIGER-Lab/StructLM-7B-Mistral", use_fast=False)
     bert_tokenizer = AutoTokenizer.from_pretrained("google-bert/bert-base-uncased", use_fast=False)
 
     graph_pad_token = DEFAULT_GRAPH_PAD_TOKEN
     bert_tokenizer.add_tokens(
-        ["[TAB]", "[HEAD]", "[CELL]", "[ROW]", "scinotexp"],
+        new_tokens = ["[TAB]", "[HEAD]", "[CELL]", "[ROW]", "scinotexp"],
         special_tokens=True,
     )
     llm_tokenizer.add_tokens([graph_pad_token], special_tokens=True)
@@ -360,9 +371,9 @@ if __name__ == "__main__":
     )
     data_collator = DataCollatorForGraphSupervisedDataset(llm_tokenizer)
 
-    loader = DataLoader(train_dataset, 2, collate_fn=data_collator)
+    loader = DataLoader(val_dataset, 2, collate_fn=data_collator)
     for batch in loader:
-        print(llm_tokenizer.decode(batch['input_ids'][0]))
+        print(batch)
         break
 
     # from StructQformer.models.hytrel import Encoder

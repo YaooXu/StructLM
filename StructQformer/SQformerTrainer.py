@@ -357,24 +357,25 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
         os.makedirs(output_dir, exist_ok=True)
         logger.info(f"Saving model checkpoint to {output_dir}")
 
-        supported_classes = (PreTrainedModel,) if not is_peft_available() else (PreTrainedModel, PeftModel)
-        # Save a trained model and configuration using `save_pretrained()`.
-        # They can then be reloaded using `from_pretrained()`
-        if not isinstance(self.model.llm, supported_classes):
-            if state_dict is None:
-                state_dict = self.model.llm.state_dict()
+        if self.model.finetuning_type != 'freeze_backbone':
+            supported_classes = (PreTrainedModel,) if not is_peft_available() else (PreTrainedModel, PeftModel)
+            # Save a trained model and configuration using `save_pretrained()`.
+            # They can then be reloaded using `from_pretrained()`
+            if not isinstance(self.model.llm, supported_classes):
+                if state_dict is None:
+                    state_dict = self.model.llm.state_dict()
 
-            if isinstance(unwrap_model(self.model.llm), supported_classes):
-                unwrap_model(self.model.llm).save_pretrained(
+                if isinstance(unwrap_model(self.model.llm), supported_classes):
+                    unwrap_model(self.model.llm).save_pretrained(
+                        output_dir, state_dict=state_dict, safe_serialization=self.args.save_safetensors
+                    )
+                else:
+                    logger.info("Trainer.model is not a `PreTrainedModel`, only saving its state dict.")
+                    torch.save(state_dict, os.path.join(output_dir, WEIGHTS_NAME))
+            else:
+                self.model.llm.save_pretrained(
                     output_dir, state_dict=state_dict, safe_serialization=self.args.save_safetensors
                 )
-            else:
-                logger.info("Trainer.model is not a `PreTrainedModel`, only saving its state dict.")
-                torch.save(state_dict, os.path.join(output_dir, WEIGHTS_NAME))
-        else:
-            self.model.llm.save_pretrained(
-                output_dir, state_dict=state_dict, safe_serialization=self.args.save_safetensors
-            )
             
         _state_dict = state_dict
         if _state_dict is None:

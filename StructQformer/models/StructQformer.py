@@ -50,7 +50,7 @@ class StructQformer(nn.Module):
         if self.strategy[:2] == "v2":
             # self.hypergraph_encoder = HyperGraphEncoder(hypergraph_enc_config)
             self.graph_encoder = Graphormer(args.encoder_model_path)
-            
+
             self.model = BertLMHeadModel.from_pretrained(
                 self.encoder_model_path, config=self.encoder_config
             )
@@ -66,7 +66,7 @@ class StructQformer(nn.Module):
             #     self.encoder_config.hidden_size, eps=self.encoder_config.layer_norm_eps
             # )
         else:
-            self.hypergraph_encoder = None
+            self.graph_encoder = None
             self.model = None
             self.projector = None
             self.query_token_embeds = nn.Parameter(torch.zeros(self.num_query_tokens, 4096))
@@ -83,7 +83,8 @@ class StructQformer(nn.Module):
                         module.bias.data.zero_()
 
     def resize_token_embeddings(self, new_num_tokens):
-        self.graph_encoder.model.resize_token_embeddings(new_num_tokens)
+        if self.graph_encoder:
+            self.graph_encoder.model.resize_token_embeddings(new_num_tokens)
         # if self.model is not None:
         #     self.model.resize_token_embeddings(new_num_tokens)
 
@@ -116,7 +117,7 @@ class StructQformer(nn.Module):
         else:
             graph_embeds = self.graph_encoder(graph['graph'])
             graph_attention_mask = graph['graph']["graph_attention_mask"]
-            
+
             # graph_embeds = self.hypergraph_encoder(graph["graph"])
 
             # idxes = graph["graph"]["ptr"].tolist()
@@ -175,6 +176,36 @@ class StructQformerLLM(nn.Module):
         self.bert_graph_pad_token = None
         self.llm_graph_pad_token_id = None
         self.llm_pad_token_id = None
+        self.finetuning_type = args.finetuning_type
+        
+        if self.num_query_tokens > 0:
+            self.qformer = StructQformer(args, hypergraph_enc_config)
+
+            bert_tokenizer.add_tokens(["[TAB]", "[HEAD]", "[CELL]", "[ROW]",
+                                       "scinotexp"], special_tokens=True)
+            self.bert_graph_pad_token = bert_tokenizer.convert_tokens_to_ids([DEFAULT_GRAPH_PAD_TOKEN])[
+                0
+            ]
+            self.qformer.resize_token_embeddings(len(bert_tokenizer))
+            # if self.qformer.hypergraph_encoder:
+            #     # load graph encoder
+            #     logger.info(f"loading hypergraph_encoder ckpt")
+            #     state_dict = torch.load(
+            #         open(
+            #             'models/ckpts/hytrel/mp_rank_00_model_states.pt',
+            #             "rb",
+            #         )
+            #     )
+
+            #     new_state_dict = OrderedDict()
+            #     logger.info(f"loading graph encoder")
+            #     for k, v in state_dict["module"].items():
+            #         if "model" in k:
+            #             name = k[13:]  # remove `module.model.`
+            #             new_state_dict[name] = v
+            #     self.qformer.hypergraph_encoder.load_state_dict(new_state_dict, strict=True)
+        else:
+            self.qformer = None
 
         self.llm: LlamaForCausalLM = AutoModelForCausalLM.from_pretrained(
             args.model_name_or_path,
@@ -197,46 +228,16 @@ class StructQformerLLM(nn.Module):
             )
             self.llm = get_peft_model(self.llm, peft_config)
             self.llm.print_trainable_parameters()
-            
+
             if args.ckpt_path is not None:
                 logger.info(f'loading lora ckpt from {args.ckpt_path}')
                 self.llm.load_adapter(args.ckpt_path)
-                
+
         elif args.finetuning_type == 'freeze_backbone':
             for name, param in self.llm.named_parameters():
                 param.requires_grad = False
         else:
             raise NotImplementedError
-
-        if self.num_query_tokens > 0:
-            self.qformer = StructQformer(args, hypergraph_enc_config)
-            qformer = self.qformer
-
-            bert_tokenizer.add_tokens(["[TAB]", "[HEAD]", "[CELL]", "[ROW]", "scinotexp"], special_tokens=True)
-            self.bert_graph_pad_token = bert_tokenizer.convert_tokens_to_ids([DEFAULT_GRAPH_PAD_TOKEN])[
-                0
-            ]
-            qformer.resize_token_embeddings(len(bert_tokenizer))
-            # if self.qformer.hypergraph_encoder:
-            #     # load graph encoder
-            #     logger.info(f"loading hypergraph_encoder ckpt")
-            #     state_dict = torch.load(
-            #         open(
-            #             'models/ckpts/hytrel/mp_rank_00_model_states.pt',
-            #             "rb",
-            #         )
-            #     )
-
-            #     new_state_dict = OrderedDict()
-            #     logger.info(f"loading graph encoder")
-            #     for k, v in state_dict["module"].items():
-            #         if "model" in k:
-            #             name = k[13:]  # remove `module.model.`
-            #             new_state_dict[name] = v
-            #     self.qformer.hypergraph_encoder.load_state_dict(new_state_dict, strict=True)
-
-        else:
-            self.qformer = None
 
     @property
     def config(self):

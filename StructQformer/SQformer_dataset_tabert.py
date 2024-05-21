@@ -335,7 +335,7 @@ if __name__ == "__main__":
 
     max_seq_length = 2560
     max_desc_length = 2048
-    num_query_tokens = 10
+    num_query_tokens = 0
     preprocessing_num_workers = 32
     reprocess = True
     train_dataset = build_instruction_dataset(

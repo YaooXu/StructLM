@@ -14,7 +14,7 @@ import re
 import pandas as pd
 import torch
 from tqdm import tqdm
-from utils.utils import load_json, write_jsonl
+from utils.utils import df_to_jsonl, load_json, write_jsonl
 
 from collections import defaultdict, deque
 from torch_geometric.data import Data
@@ -218,17 +218,17 @@ class TableConverter:
 
             node_token_ids = torch.tensor(
                 [self.tokenizer.convert_tokens_to_ids(x) for x in wordpieces_all], dtype=torch.long
-            )
+            ).numpy()
             edge_index = np.array(edge_index).T
             node_types = np.array(node_types)
+            dist_mat = _get_dist_mat(len(wordpieces_all), edge_index)
+
             graph = {
-                "edge_index": edge_index,
-                'node_token_ids': node_token_ids,
-                "node_types": node_types,
+                "edge_index": edge_index.tolist(),
+                'node_token_ids': node_token_ids.tolist(),
+                "node_types": node_types.tolist(),
+                "dist_mat": dist_mat.tolist()
             }
-            if get_dist_mat:
-                dist_mat = _get_dist_mat(len(wordpieces_all), edge_index)
-                graph['dist_mat'] = dist_mat
 
             return graph
         except:
@@ -273,6 +273,7 @@ def obtain_samples(process_idx, idxes_to_process):
 
         graph = converter._text2graph(table, True)
         if graph:
+            sample['graph'] = graph
             sample["struct_in"] = table
             new_samples.append(sample)
 
@@ -288,76 +289,76 @@ def obtain_samples(process_idx, idxes_to_process):
 
 if __name__ == "__main__":
 
-    output_dir = 'WTQ_Mistral_Tabert'
+    output_dir = 'WTQ_Inter_opt'
     os.makedirs(f'data/{output_dir}', exist_ok=True)
     n_process = 32
-    shuffle = False
 
-    path = "data/processed/skginstruct_skgonly.json"
-    tab_tasks = ['tab_fact', 'wikitq', 'wikisql', 'tabmwp', 'fetaqa']
-    tab_tasks = ['wikitq']
+    # path = "data/processed/skginstruct_skgonly.json"
+    # tab_tasks = ['tab_fact', 'wikitq', 'wikisql', 'tabmwp', 'fetaqa']
+    # tab_tasks = ['wikitq']
 
     # path = "data/processed/skginstruct_test_file_mistral.json"
     # tab_tasks = ['task: tabfact', 'task: wiki table question', 'task: wikisql']
     # tab_tasks = ['task: wiki table question']
-    all_samples = load_json(path)
+    for path, tab_tasks in zip(["data/processed/skginstruct_skgonly.json", "data/processed/skginstruct_test_file_mistral.json"],
+                               [['wikitq'], ['task: wiki table question']]):
+        all_samples = load_json(path)
 
-    tasks_to_samples = defaultdict(list)
-    for sample in all_samples:
-        if "test" in path:
-            tasks_to_samples[sample["description"]].append(sample)
-        else:
-            tasks_to_samples[sample["task_name"]].append(sample)
-    print(list(tasks_to_samples.keys()))
+        tasks_to_samples = defaultdict(list)
+        for sample in all_samples:
+            if "test" in path:
+                tasks_to_samples[sample["description"]].append(sample)
+            else:
+                tasks_to_samples[sample["task_name"]].append(sample)
+        print(list(tasks_to_samples.keys()))
 
-    samples = []
-    for task in tab_tasks:
-        samples.extend(tasks_to_samples[task])
-
-    num_samples = len(samples)
-    print(num_samples)
-
-    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-    new_tokens = ["[TAB]", "[HEAD]", "[CELL]", "[ROW]", "scinotexp"]
-    tokenizer.add_tokens(new_tokens, special_tokens=True)
-
-    converter = TableConverter(tokenizer)
-
-    with Pool(processes=n_process) as pool:
-        num_samples_in_chunk = num_samples // n_process + 1
-        jobs = []
-        st = 0
-        for i in range(n_process):
-            ed = st + num_samples_in_chunk
-            ed = min(ed, num_samples)
-            jobs.append([i, list(range(st, ed))])
-            st = ed
-
-        results = pool.starmap(obtain_samples, jobs)
-
-    new_samples = []
-    for samples in results:
-        new_samples.extend(samples)
-
-    print(len(new_samples))
-    if "test" in path:
-        if len(tab_tasks) > 1:
-            random.shuffle(new_samples)
-        write_jsonl(f"data/{output_dir}/ori_test.jsonl", new_samples)
-        write_jsonl(f"data/{output_dir}/ori_val.jsonl", new_samples[:1000])
-
-        remain_keys = ['label', 'question', 'inst', 'struct_in']
         samples = []
-        for sample in new_samples:
-            samples.append({k: sample[k] for k in remain_keys})
-        write_jsonl(f"data/{output_dir}/test.jsonl", samples)
-        write_jsonl(f"data/{output_dir}/val.jsonl", samples[:1000])
-    else:
-        train = new_samples
+        for task in tab_tasks:
+            samples.extend(tasks_to_samples[task])
 
-        for dataset, name in zip([train], ["train"]):
-            with open(f"data/{output_dir}/{name}.jsonl", "w") as f:
-                for sample in dataset:
-                    f.write(json.dumps(sample) + "\n")
+        num_samples = len(samples)
+        print(num_samples)
 
-    print("done")
+        tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+        new_tokens = ["[TAB]", "[HEAD]", "[CELL]", "[ROW]", "scinotexp"]
+        tokenizer.add_tokens(new_tokens, special_tokens=True)
+
+        converter = TableConverter(tokenizer)
+
+        with Pool(processes=n_process) as pool:
+            num_samples_in_chunk = num_samples // n_process + 1
+            jobs = []
+            st = 0
+            for i in range(n_process):
+                ed = st + num_samples_in_chunk
+                ed = min(ed, num_samples)
+                jobs.append([i, list(range(st, ed))])
+                st = ed
+
+            results = pool.starmap(obtain_samples, jobs)
+
+        new_samples = []
+        for samples in results:
+            new_samples.extend(samples)
+
+        print(len(new_samples))
+
+        if "test" in path:
+            if len(tab_tasks) > 1:
+                random.shuffle(new_samples)
+
+            df = pd.DataFrame(new_samples)
+
+            remain_keys = ['label', 'question', 'inst', 'struct_in', 'graph']
+            sub_df = df[remain_keys]
+            sub_df.to_parquet(f'data/{output_dir}/test.pq', engine='pyarrow', index=False)
+            sub_df.to_parquet(f'data/{output_dir}/val.pq', engine='pyarrow', index=False)
+
+            df_excluded = df.drop(columns=remain_keys)
+            df_to_jsonl(df_excluded, f"data/{output_dir}/ori_test.jsonl")
+            df_to_jsonl(df_excluded, f"data/{output_dir}/ori_val.jsonl")
+        else:
+            df = pd.DataFrame(new_samples)
+            df.to_parquet(f'data/{output_dir}/train.pq', engine='pyarrow', index=False)
+
+        print("done")

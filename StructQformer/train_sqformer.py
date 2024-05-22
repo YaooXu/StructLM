@@ -209,7 +209,7 @@ if __name__ == "__main__":
     train_dataset, eval_dataset = None, None
     if training_args.do_train:
         train_dataset = build_instruction_dataset(
-            dataset_dir / f"train.jsonl",
+            dataset_dir / f"train.pq",
             llm_tokenizer,
             bert_tokenizer,
             max_seq_length=data_args.max_seq_length,
@@ -217,18 +217,18 @@ if __name__ == "__main__":
             num_query_tokens=model_args.num_query_tokens,
         )
         eval_dataset = build_instruction_dataset(
-            dataset_dir / f"val.jsonl",
+            dataset_dir / f"val.pq",
             llm_tokenizer,
             bert_tokenizer,
             max_seq_length=data_args.max_seq_length,
             max_desc_length=data_args.max_desc_length,
             num_query_tokens=model_args.num_query_tokens,
         )
-        eval_dataset = eval_dataset.select(random.sample(range(len(eval_dataset)), k=1000))
+        # eval_dataset = eval_dataset.select(random.sample(range(len(eval_dataset)), k=1000))
 
     if training_args.do_train or training_args.do_predict:
         test_dataset = build_instruction_dataset(
-            dataset_dir / f"test.jsonl",
+            dataset_dir / f"test.pq",
             llm_tokenizer,
             bert_tokenizer,
             max_seq_length=data_args.max_seq_length,

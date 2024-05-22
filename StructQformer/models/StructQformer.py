@@ -57,10 +57,13 @@ class StructQformer(nn.Module):
             self.query_token_embeds = nn.Parameter(
                 torch.zeros(self.num_query_tokens, self.encoder_config.hidden_size)
             )
-            self.projector = nn.Sequential(
-                nn.Linear(self.encoder_config.hidden_size, 2048),
-                nn.Tanh(),
-                nn.Linear(2048, 4096),
+            self.projector1 = nn.Sequential(
+                nn.Linear(4096, self.encoder_config.hidden_size),
+            )
+            self.projector2 = nn.Sequential(
+                nn.Linear(self.encoder_config.hidden_size, 4096),
+                # nn.Tanh(),
+                # nn.Linear(2048, 4096),
             )
             # self.LayerNorm = nn.LayerNorm(
             #     self.encoder_config.hidden_size, eps=self.encoder_config.layer_norm_eps
@@ -68,19 +71,22 @@ class StructQformer(nn.Module):
         else:
             self.graph_encoder = None
             self.model = None
-            self.projector = None
+            self.projector1 = None
+            self.projector2 = None
             self.query_token_embeds = nn.Parameter(torch.zeros(self.num_query_tokens, 4096))
 
         self.init_weight()
 
     def init_weight(self):
         self.query_token_embeds.data.normal_(mean=0.0, std=self.encoder_config.initializer_range)
-        if self.projector is not None:
-            for module in self.projector:
-                if isinstance(module, nn.Linear):
-                    module.weight.data.normal_(mean=0.0, std=self.encoder_config.initializer_range)
-                    if module.bias is not None:
-                        module.bias.data.zero_()
+        # for proj in [self.projector1, self.projector2]:
+        #     if proj is not None:
+        #         for module in proj:
+        #             if isinstance(module, nn.Linear):
+        #                 module.weight.data.normal_(
+        #                     mean=0.0, std=self.encoder_config.initializer_range)
+        #                 if module.bias is not None:
+        #                     module.bias.data.zero_()
 
     def resize_token_embeddings(self, new_num_tokens):
         if self.graph_encoder:
@@ -131,29 +137,33 @@ class StructQformer(nn.Module):
             #     list_graph_attn, batch_first=True
             # ).to(graph_embeds.device)
 
-            question_embeds = self.model.bert.embeddings(question_ids)
-            # add ln and dp
-            query_embeds = self.model.bert.embeddings(input_embeds=self.query_token_embeds)
-            query_embeds = query_embeds.unsqueeze(0).expand(batch_size, -1, -1)
+            # question_embeds = self.model.bert.embeddings(question_ids)
+            # # add ln and dp
+            # query_embeds = self.model.bert.embeddings(input_embeds=self.query_token_embeds)
+            # query_embeds = query_embeds.unsqueeze(0).expand(batch_size, -1, -1)
 
-            input_embeds = torch.cat([question_embeds, query_embeds], dim=1)
+            # input_embeds = torch.cat([question_embeds, query_embeds], dim=1)
 
+            # query_atts = torch.ones(query_embeds.shape[:-1]).to(self.device)
+            # attention_mask = torch.cat([question_attention_mask, query_atts], dim=1)
+
+            # from bf16 fp32
+            query_embeds = self.projector1(graph['query_embeds'].to(graph_embeds.dtype))
             query_atts = torch.ones(query_embeds.shape[:-1]).to(self.device)
-            attention_mask = torch.cat([question_attention_mask, query_atts], dim=1)
 
             question_output = self.model.bert(
-                input_embeds=input_embeds,
-                attention_mask=attention_mask,
+                input_embeds=query_embeds,
+                attention_mask=query_atts,
                 encoder_hidden_states=graph_embeds,
                 encoder_attention_mask=graph_attention_mask,
                 query_length=self.num_query_tokens,
                 use_cache=False,
             )
-            query_embeds = question_output.last_hidden_state[:, -self.num_query_tokens:, :]
+            res_embeds = question_output.last_hidden_state[:, -self.num_query_tokens:, :]
 
-        query_embeds = self.projector(query_embeds)
+        res_embeds = self.projector2(res_embeds)
 
-        return query_embeds
+        return res_embeds
 
     def forward(self, graph):
         if self.strategy == "pt":
@@ -177,7 +187,7 @@ class StructQformerLLM(nn.Module):
         self.llm_graph_pad_token_id = None
         self.llm_pad_token_id = None
         self.finetuning_type = args.finetuning_type
-        
+
         if self.num_query_tokens > 0:
             self.qformer = StructQformer(args, hypergraph_enc_config)
 
@@ -212,6 +222,14 @@ class StructQformerLLM(nn.Module):
             **kwargs
         )
         self.init_tokenizer_and_embeds(llm_tokenizer, bert_tokenizer, DEFAULT_GRAPH_PAD_TOKEN)
+
+        self.query_token_embeds = nn.Parameter(
+            torch.zeros(self.num_query_tokens, 4096)
+        )
+        self.query_token_embeds.data.normal_(mean=0.0, std=0.02)
+        embedding_norm_mean = self.llm.get_input_embeddings().weight.data.norm(p=2, dim=1).mean().item()
+        self.query_token_embeds.data /= self.query_token_embeds.data.norm(p=2, dim=1, keepdim=True)
+        self.query_token_embeds.data *= embedding_norm_mean
 
         if args.finetuning_type == 'full':
             for name, param in self.llm.named_parameters():
@@ -287,27 +305,55 @@ class StructQformerLLM(nn.Module):
         print(f"{trainable_params} / {all_param}, {trainable_params*100/all_param}%")
         return trainable_params, all_param
 
+    def construct_query_embeds(self, graph):
+        inputs_embeds = self.llm.get_input_embeddings()(graph['question_input_ids'])
+        batch_size = inputs_embeds.shape[0]
+
+        graph_pad_st_idx = torch.argmax(
+            (graph['question_input_ids'] == self.llm_graph_pad_token_id).int(), dim=1)
+        graph_pad_ed_idx = graph_pad_st_idx + self.num_query_tokens
+
+        new_inputs_embeds = torch.zeros_like(inputs_embeds).to(inputs_embeds.device)
+        for i in range(batch_size):
+            cur_inputs_embeds = inputs_embeds[i]
+            cur_graph_pad_st_idx, cur_graph_pad_ed_idx = graph_pad_st_idx[i], graph_pad_ed_idx[i]
+
+            new_inputs_embeds[i][:cur_graph_pad_st_idx] += cur_inputs_embeds[:cur_graph_pad_st_idx]
+            new_inputs_embeds[i][cur_graph_pad_st_idx: cur_graph_pad_ed_idx] += self.query_token_embeds
+
+        # LLM generates query tokens
+        output = self.llm(inputs_embeds=new_inputs_embeds,
+                          attention_mask=graph['question_attention_mask'], output_hidden_states=True)
+        last_hidden_state = output.hidden_states[-1]
+
+        query_embeds = torch.zeros(
+            (batch_size, self.num_query_tokens, 4096)).to(inputs_embeds.device)
+        for i in range(batch_size):
+            query_embeds[i] += last_hidden_state[i][graph_pad_st_idx[i]: graph_pad_ed_idx[i]]
+
+        return query_embeds
+
     def construct_inputs_embeds(self, input_ids, graph):
         inputs_embeds = self.llm.get_input_embeddings()(input_ids)
+        batch_size = inputs_embeds.shape[0]
 
         if self.num_query_tokens > 0:
-            query_embeds = self.qformer(graph).to(inputs_embeds.dtype)
+            query_embeds = self.construct_query_embeds(graph)
+            graph['query_embeds'] = query_embeds
+
+            res_embeds = self.qformer(graph).to(inputs_embeds.dtype)
 
             graph_pad_st_idx = torch.argmax((input_ids == self.llm_graph_pad_token_id).int(), dim=1)
             graph_pad_ed_idx = graph_pad_st_idx + self.num_query_tokens
 
-            batch_size = inputs_embeds.shape[0]
             new_inputs_embeds = torch.zeros_like(inputs_embeds).to(inputs_embeds.device)
             for i in range(batch_size):
-                # inputs_embeds[i][graph_pad_st_idx[i]: graph_pad_ed_idx[i]] = query_embeds[i]
                 cur_inputs_embeds = inputs_embeds[i]
-                cur_new_inputs_embeds = new_inputs_embeds[i]
-                cur_graph_embeds = query_embeds[i]
                 cur_graph_pad_st_idx, cur_graph_pad_ed_idx = graph_pad_st_idx[i], graph_pad_ed_idx[i]
 
-                cur_new_inputs_embeds[:cur_graph_pad_st_idx] += cur_inputs_embeds[:cur_graph_pad_st_idx]
-                cur_new_inputs_embeds[cur_graph_pad_st_idx: cur_graph_pad_ed_idx] += cur_graph_embeds
-                cur_new_inputs_embeds[cur_graph_pad_ed_idx:] += cur_inputs_embeds[cur_graph_pad_ed_idx:]
+                new_inputs_embeds[i][:cur_graph_pad_st_idx] += cur_inputs_embeds[:cur_graph_pad_st_idx]
+                new_inputs_embeds[i][cur_graph_pad_st_idx: cur_graph_pad_ed_idx] += res_embeds[i]
+                new_inputs_embeds[i][cur_graph_pad_ed_idx:] += cur_inputs_embeds[cur_graph_pad_ed_idx:]
         else:
             new_inputs_embeds = inputs_embeds
 

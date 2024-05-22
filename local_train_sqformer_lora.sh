@@ -21,7 +21,7 @@ cross_attention_freq=1
 batch_size=1
 finetuning_type=freeze_backbone
 
-dataset_dir=data/WTQ_Mistral_Tabert
+dataset_dir=data/WTQ_Inter_opt
 # dataset_dir=data/5Task_Mistral
 
 wandb online
@@ -35,15 +35,14 @@ model_name_or_path=models/ckpts/StructLM-7B-Mistral
 # model_name_or_path=codellama/CodeLlama-7b-Instruct-hf
         # --gradient_checkpointing \
 
-for strategy in v2.6 ; do
-    for num_train_epochs in 3 ; do
+for finetuning_type in freeze_backbone ; do
+    for num_query_tokens in 10 ; do
     
         model_name=$(basename "$model_name_or_path")
 
         deepspeed --include localhost:0,1,2,3 --master_port=${master_port} StructQformer/train_sqformer.py \
                 --model_name_or_path=${model_name_or_path} \
                 --do_train \
-                --skip_graph_encoder \
                 --finetuning_type=${finetuning_type} \
                 --overwrite_output_dir \
                 --deepspeed=${deepspeed_config_file} \
@@ -55,7 +54,7 @@ for strategy in v2.6 ; do
                 --max_seq_length=${max_seq_length} \
                 --cross_attention_freq=${cross_attention_freq} \
                 --dataset_dir=${dataset_dir} \
-                --output_dir=./outputs/no_gc_${dataset_dir}/skip_ge_${model_name}_${finetuning_type}_${strategy}_${max_desc_length}_${max_seq_length}_${num_query_tokens}_${batch_size}_${num_train_epochs} \
+                --output_dir=./outputs/no_gc_${dataset_dir}/init_query_tokens_${model_name}_${finetuning_type}_${strategy}_${max_desc_length}_${max_seq_length}_${num_query_tokens}_${batch_size}_${num_train_epochs} \
                 --seed=0 \
                 --num_train_epochs=${num_train_epochs} \
                 --per_device_train_batch_size=${batch_size} \
@@ -72,5 +71,6 @@ for strategy in v2.6 ; do
                 --lr_scheduler_type=cosine \
                 --logging_steps=50 \
                 --report_to wandb
+                
         done
 done

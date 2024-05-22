@@ -34,3 +34,10 @@ def write_jsonl(path, samples):
     with open(path, 'w') as f:
         for sample in samples:
             f.write(json.dumps(sample) + '\n')
+            
+def df_to_jsonl(df, filename):
+    with open(filename, 'w') as f:
+        for _, row in df.iterrows():
+            json_obj = row.to_json()
+            f.write(json_obj)
+            f.write('\n')

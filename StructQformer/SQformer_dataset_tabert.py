@@ -127,10 +127,12 @@ def build_instruction_dataset(
 
             target = f"{label}{llm_tokenizer.eos_token}"
 
+            question = f'{question} query tokens: {DEFAULT_GRAPH_PAD_TOKEN * num_query_tokens}'
+
             sources.append(source)
             targets.append(target)
             questions.append(question)
-            graphs.append(converter._text2graph(struct_in, True))
+            # graphs.append(converter._text2graph(struct_in, True))
 
             # if shuffle_desc:
             #     node_texts = desc.split("\n")
@@ -139,7 +141,9 @@ def build_instruction_dataset(
 
             insts.append(inst)
             struct_ins.append(struct_in)
-
+        
+        graphs = examples['graph']
+        
         # add_special_tokens=False: not add <s>
         tokenized_insts = llm_tokenizer(
             insts, return_attention_mask=False, add_special_tokens=False
@@ -153,7 +157,7 @@ def build_instruction_dataset(
         tokenized_targets = llm_tokenizer(
             targets, return_attention_mask=False, add_special_tokens=False
         )
-        tokenized_questions = bert_tokenizer(questions)
+        tokenized_questions = llm_tokenizer(questions)
 
         all_input_ids = []
         all_labels = []
@@ -194,11 +198,8 @@ def build_instruction_dataset(
             
             graph["node_types"] = torch.LongTensor(graph["node_types"])
             graph["graph_attention_mask"] = torch.LongTensor([1] * num_nodes)
-            graph["node_token_ids"] = torch.LongTensor(graph["node_token_ids"])
-            
-            dist_mat = _get_dist_mat(num_nodes, graph["edge_index"])
             # -1 -> 0
-            graph["dist_mat"] = torch.LongTensor(dist_mat) + 1
+            graph["node_token_ids"] = torch.LongTensor(graph["node_token_ids"])
 
         results = {
             "input_ids": all_input_ids,
@@ -228,7 +229,7 @@ def build_instruction_dataset(
             processed_dataset = datasets.load_from_disk(cache_path)
             logger.info(f"training datasets-{file} has been loaded from disk")
         except Exception as e:
-            raw_dataset = load_dataset("json", data_files=file)
+            raw_dataset = load_dataset("parquet", data_files=file)
             tokenized_dataset = raw_dataset.map(
                 tokenization,
                 batched=True,
@@ -278,10 +279,10 @@ class DataCollatorForGraphSupervisedDataset(object):
 
         # Qformer input
         question_ids = [instance["question_ids"] for instance in instances]
-        question_ids = torch.nn.utils.rnn.pad_sequence(question_ids, batch_first=True)
+        question_ids = self.llm_tokenizer.pad({"input_ids": question_ids})["input_ids"]
         batch_graph = {
             "question_input_ids": question_ids,
-            "question_attention_mask": question_ids.ne(0),
+            "question_attention_mask": question_ids.ne(self.llm_tokenizer.pad_token_id),
             "graph": graphs,
         }
 
@@ -320,7 +321,7 @@ if __name__ == "__main__":
 
     set_seed(0)
 
-    dataset_dir = pathlib.Path("data/WTQ_Mistral_Tabert")
+    dataset_dir = pathlib.Path("data/WTQ_Inter_opt")
 
     llm_tokenizer = AutoTokenizer.from_pretrained("TIGER-Lab/StructLM-7B-Mistral", use_fast=False)
     bert_tokenizer = AutoTokenizer.from_pretrained("google-bert/bert-base-uncased", use_fast=False)
@@ -335,11 +336,11 @@ if __name__ == "__main__":
 
     max_seq_length = 2560
     max_desc_length = 2048
-    num_query_tokens = 0
-    preprocessing_num_workers = 32
+    num_query_tokens = 10
+    preprocessing_num_workers = 1
     reprocess = True
     train_dataset = build_instruction_dataset(
-        dataset_dir / f"train.jsonl",
+        dataset_dir / f"train.pq",
         llm_tokenizer,
         bert_tokenizer,
         max_seq_length=max_seq_length,
@@ -349,7 +350,7 @@ if __name__ == "__main__":
         reprocess=reprocess,
     )
     val_dataset = build_instruction_dataset(
-        dataset_dir / f"val.jsonl",
+        dataset_dir / f"val.pq",
         llm_tokenizer,
         bert_tokenizer,
         max_seq_length=max_seq_length,
@@ -359,7 +360,7 @@ if __name__ == "__main__":
         reprocess=reprocess,
     )
     test_dataset = build_instruction_dataset(
-        dataset_dir / f"test.jsonl",
+        dataset_dir / f"test.pq",
         llm_tokenizer,
         bert_tokenizer,
         max_seq_length=max_seq_length,

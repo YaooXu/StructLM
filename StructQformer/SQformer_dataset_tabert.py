@@ -120,9 +120,9 @@ def build_instruction_dataset(
             examples["label"], examples["question"], examples["inst"], examples["struct_in"]
         ):  
             if num_query_tokens > 0:
-                source = f"\n\ntable representation tokens: {DEFAULT_GRAPH_PAD_TOKEN * num_query_tokens}\n\n\nquestion:\n\n{question}"
+                source = f"\n\nstruct data representation tokens: {DEFAULT_GRAPH_PAD_TOKEN * num_query_tokens}\n\n\n{question}"
             else:
-                source = f"\n\n\nquestion:\n\n{question}"
+                source = f"\n\n\n{question}"
             source += "\n\n### Response:\n"
 
             target = f"{label}{llm_tokenizer.eos_token}"
@@ -321,7 +321,7 @@ if __name__ == "__main__":
 
     set_seed(0)
 
-    dataset_dir = pathlib.Path("data/WTQ_Inter_opt")
+    dataset_dir = pathlib.Path("data/WTQ_Inter_opt_exp")
 
     llm_tokenizer = AutoTokenizer.from_pretrained("TIGER-Lab/StructLM-7B-Mistral", use_fast=False)
     bert_tokenizer = AutoTokenizer.from_pretrained("google-bert/bert-base-uncased", use_fast=False)

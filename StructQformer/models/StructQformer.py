@@ -1,5 +1,6 @@
 from collections import OrderedDict
 import logging
+from math import sqrt
 import os
 from typing import Optional
 import torch
@@ -30,6 +31,49 @@ from peft import get_peft_config, get_peft_model, LoraConfig, TaskType
 logger = logging.getLogger(__name__)
 
 
+class QueryEmbedsGenerator(nn.Module):
+    def __init__(self, num_query_tokens, llm_hidden_size=4096) -> None:
+        super().__init__()
+        self.num_query_tokens = num_query_tokens
+        self.llm_hidden_size = llm_hidden_size
+        self.query_token_embeds = nn.Parameter(
+            torch.zeros(self.num_query_tokens, llm_hidden_size)
+        )
+        self.query_token_embeds.data.normal_(mean=0.0, std=0.02)
+        self.ln_norm = nn.LayerNorm(llm_hidden_size)
+
+    def forward(self, graph, llm, llm_graph_pad_token_id):
+        inputs_embeds = llm.get_input_embeddings()(graph['question_input_ids'])
+        batch_size = inputs_embeds.shape[0]
+
+        graph_pad_st_idx = torch.argmax(
+            (graph['question_input_ids'] == llm_graph_pad_token_id).int(), dim=1)
+        graph_pad_ed_idx = graph_pad_st_idx + self.num_query_tokens
+
+        query_token_embeds = self.query_token_embeds
+        query_token_embeds = self.ln_norm(query_token_embeds)
+
+        new_inputs_embeds = torch.zeros_like(inputs_embeds).to(inputs_embeds.device)
+        for i in range(batch_size):
+            cur_inputs_embeds = inputs_embeds[i]
+            cur_graph_pad_st_idx, cur_graph_pad_ed_idx = graph_pad_st_idx[i], graph_pad_ed_idx[i]
+
+            new_inputs_embeds[i][:cur_graph_pad_st_idx] += cur_inputs_embeds[:cur_graph_pad_st_idx]
+            new_inputs_embeds[i][cur_graph_pad_st_idx: cur_graph_pad_ed_idx] += query_token_embeds
+
+        # LLM generates query tokens
+        output = llm(inputs_embeds=new_inputs_embeds,
+                     attention_mask=graph['question_attention_mask'], output_hidden_states=True)
+        last_hidden_state = output.hidden_states[-1]
+
+        query_embeds = torch.zeros(
+            (batch_size, self.num_query_tokens, self.llm_hidden_size)).to(inputs_embeds.device)
+        for i in range(batch_size):
+            query_embeds[i] += last_hidden_state[i][graph_pad_st_idx[i]: graph_pad_ed_idx[i]]
+
+        return query_embeds
+
+
 class StructQformer(nn.Module):
     def __init__(self, args, hypergraph_enc_config) -> None:
         super().__init__()
@@ -57,36 +101,30 @@ class StructQformer(nn.Module):
             self.query_token_embeds = nn.Parameter(
                 torch.zeros(self.num_query_tokens, self.encoder_config.hidden_size)
             )
-            self.projector1 = nn.Sequential(
-                nn.Linear(4096, self.encoder_config.hidden_size),
-            )
-            self.projector2 = nn.Sequential(
-                nn.Linear(self.encoder_config.hidden_size, 4096),
-                # nn.Tanh(),
-                # nn.Linear(2048, 4096),
-            )
-            # self.LayerNorm = nn.LayerNorm(
-            #     self.encoder_config.hidden_size, eps=self.encoder_config.layer_norm_eps
-            # )
+            self.projector1 = nn.Linear(4096, self.encoder_config.hidden_size)
+            self.projector2 = nn.Linear(self.encoder_config.hidden_size, 4096)
+
+            self.ln_norm1 = nn.LayerNorm(768)
+            self.ln_norm2 = nn.LayerNorm(4096)
+
+            self.query_embeds_generator = QueryEmbedsGenerator(self.num_query_tokens)
         else:
             self.graph_encoder = None
             self.model = None
             self.projector1 = None
-            self.projector2 = None
+            self.projector2 = nn.Linear(self.encoder_config.hidden_size, 4096)
             self.query_token_embeds = nn.Parameter(torch.zeros(self.num_query_tokens, 4096))
 
         self.init_weight()
 
     def init_weight(self):
         self.query_token_embeds.data.normal_(mean=0.0, std=self.encoder_config.initializer_range)
-        # for proj in [self.projector1, self.projector2]:
-        #     if proj is not None:
-        #         for module in proj:
-        #             if isinstance(module, nn.Linear):
-        #                 module.weight.data.normal_(
-        #                     mean=0.0, std=self.encoder_config.initializer_range)
-        #                 if module.bias is not None:
-        #                     module.bias.data.zero_()
+        for proj in [self.projector1, self.projector2]:
+            if proj is not None:
+                proj.weight.data.normal_(
+                    mean=0.0, std=self.encoder_config.initializer_range)
+                if proj.bias is not None:
+                    proj.bias.data.zero_()
 
     def resize_token_embeddings(self, new_num_tokens):
         if self.graph_encoder:
@@ -107,48 +145,28 @@ class StructQformer(nn.Module):
     def device(self):
         return self.model.device
 
-    def gen_query_embeds_pt(self, graph):
+    def gen_query_embeds_pt(self, graph, llm, llm_graph_pad_token_id):
         # vanilla prompt tuning
         batch_size = graph["question_input_ids"].shape[0]
         query_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
         return query_embeds
 
-    def gen_query_embeds_v2(self, graph):
+    def gen_query_embeds_v2(self, graph, llm, llm_graph_pad_token_id):
         question_ids = graph["question_input_ids"]
-        question_attention_mask = graph["question_attention_mask"]
         batch_size = question_ids.shape[0]
 
         if self.args.skip_graph_encoder:
-            query_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
+            res_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
         else:
             graph_embeds = self.graph_encoder(graph['graph'])
             graph_attention_mask = graph['graph']["graph_attention_mask"]
 
-            # graph_embeds = self.hypergraph_encoder(graph["graph"])
-
-            # idxes = graph["graph"]["ptr"].tolist()
-            # list_graph_embeds = []
-            # list_graph_attn = []
-            # for i in range(len(idxes) - 1):
-            #     list_graph_embeds.append(graph_embeds[0][idxes[i]: idxes[i + 1], :])
-            #     list_graph_attn.append(torch.LongTensor([1] * (idxes[i + 1] - idxes[i])))
-            # graph_embeds = torch.nn.utils.rnn.pad_sequence(list_graph_embeds, batch_first=True)
-            # graph_attention_mask = torch.nn.utils.rnn.pad_sequence(
-            #     list_graph_attn, batch_first=True
-            # ).to(graph_embeds.device)
-
-            # question_embeds = self.model.bert.embeddings(question_ids)
-            # # add ln and dp
-            # query_embeds = self.model.bert.embeddings(input_embeds=self.query_token_embeds)
-            # query_embeds = query_embeds.unsqueeze(0).expand(batch_size, -1, -1)
-
-            # input_embeds = torch.cat([question_embeds, query_embeds], dim=1)
-
-            # query_atts = torch.ones(query_embeds.shape[:-1]).to(self.device)
-            # attention_mask = torch.cat([question_attention_mask, query_atts], dim=1)
-
             # from bf16 fp32
-            query_embeds = self.projector1(graph['query_embeds'].to(graph_embeds.dtype))
+            query_embeds = self.query_embeds_generator(
+                graph, llm, llm_graph_pad_token_id).to(graph_embeds.dtype)
+            query_embeds = self.projector1(query_embeds)
+            query_embeds = self.ln_norm1(query_embeds)
+
             query_atts = torch.ones(query_embeds.shape[:-1]).to(self.device)
 
             question_output = self.model.bert(
@@ -162,14 +180,15 @@ class StructQformer(nn.Module):
             res_embeds = question_output.last_hidden_state[:, -self.num_query_tokens:, :]
 
         res_embeds = self.projector2(res_embeds)
+        res_embeds = self.ln_norm2(res_embeds)
 
         return res_embeds
 
-    def forward(self, graph):
+    def forward(self, graph, llm, llm_graph_pad_token_id):
         if self.strategy == "pt":
-            query_embeds = self.gen_query_embeds_pt(graph)
+            query_embeds = self.gen_query_embeds_pt(graph, llm, llm_graph_pad_token_id)
         elif self.strategy[:2] == "v2":
-            query_embeds = self.gen_query_embeds_v2(graph)
+            query_embeds = self.gen_query_embeds_v2(graph, llm, llm_graph_pad_token_id)
         else:
             raise NotImplementedError
 
@@ -222,14 +241,6 @@ class StructQformerLLM(nn.Module):
             **kwargs
         )
         self.init_tokenizer_and_embeds(llm_tokenizer, bert_tokenizer, DEFAULT_GRAPH_PAD_TOKEN)
-
-        self.query_token_embeds = nn.Parameter(
-            torch.zeros(self.num_query_tokens, 4096)
-        )
-        self.query_token_embeds.data.normal_(mean=0.0, std=0.02)
-        embedding_norm_mean = self.llm.get_input_embeddings().weight.data.norm(p=2, dim=1).mean().item()
-        self.query_token_embeds.data /= self.query_token_embeds.data.norm(p=2, dim=1, keepdim=True)
-        self.query_token_embeds.data *= embedding_norm_mean
 
         if args.finetuning_type == 'full':
             for name, param in self.llm.named_parameters():
@@ -305,43 +316,13 @@ class StructQformerLLM(nn.Module):
         print(f"{trainable_params} / {all_param}, {trainable_params*100/all_param}%")
         return trainable_params, all_param
 
-    def construct_query_embeds(self, graph):
-        inputs_embeds = self.llm.get_input_embeddings()(graph['question_input_ids'])
-        batch_size = inputs_embeds.shape[0]
-
-        graph_pad_st_idx = torch.argmax(
-            (graph['question_input_ids'] == self.llm_graph_pad_token_id).int(), dim=1)
-        graph_pad_ed_idx = graph_pad_st_idx + self.num_query_tokens
-
-        new_inputs_embeds = torch.zeros_like(inputs_embeds).to(inputs_embeds.device)
-        for i in range(batch_size):
-            cur_inputs_embeds = inputs_embeds[i]
-            cur_graph_pad_st_idx, cur_graph_pad_ed_idx = graph_pad_st_idx[i], graph_pad_ed_idx[i]
-
-            new_inputs_embeds[i][:cur_graph_pad_st_idx] += cur_inputs_embeds[:cur_graph_pad_st_idx]
-            new_inputs_embeds[i][cur_graph_pad_st_idx: cur_graph_pad_ed_idx] += self.query_token_embeds
-
-        # LLM generates query tokens
-        output = self.llm(inputs_embeds=new_inputs_embeds,
-                          attention_mask=graph['question_attention_mask'], output_hidden_states=True)
-        last_hidden_state = output.hidden_states[-1]
-
-        query_embeds = torch.zeros(
-            (batch_size, self.num_query_tokens, 4096)).to(inputs_embeds.device)
-        for i in range(batch_size):
-            query_embeds[i] += last_hidden_state[i][graph_pad_st_idx[i]: graph_pad_ed_idx[i]]
-
-        return query_embeds
-
     def construct_inputs_embeds(self, input_ids, graph):
         inputs_embeds = self.llm.get_input_embeddings()(input_ids)
         batch_size = inputs_embeds.shape[0]
 
         if self.num_query_tokens > 0:
-            query_embeds = self.construct_query_embeds(graph)
-            graph['query_embeds'] = query_embeds
-
-            res_embeds = self.qformer(graph).to(inputs_embeds.dtype)
+            res_embeds = self.qformer(
+                graph, self.llm, self.llm_graph_pad_token_id).to(inputs_embeds.dtype)
 
             graph_pad_st_idx = torch.argmax((input_ids == self.llm_graph_pad_token_id).int(), dim=1)
             graph_pad_ed_idx = graph_pad_st_idx + self.num_query_tokens

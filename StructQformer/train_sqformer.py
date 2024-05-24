@@ -182,7 +182,7 @@ if __name__ == "__main__":
                              use_cache=False if training_args.gradient_checkpointing else True,
                              torch_dtype=torch_dtype)
 
-    if model_args.ckpt_path is not None:
+    if model_args.ckpt_path is not None and not model_args.skip_graph_encoder:
         logger.info(f"loading qformer ckpt from {model_args.ckpt_path}")
         model.qformer.load_state_dict(torch.load(os.path.join(model_args.ckpt_path, "Qformer.bin")))
 
@@ -270,4 +270,4 @@ if __name__ == "__main__":
     elif training_args.do_predict:
         trainer.data_collator = DataCollatorForGenerating(llm_tokenizer)
         logger.info("*** Predict ***")
-        metrics = trainer.predict(test_dataset, test_examples)
+        metrics = trainer.predict(test_dataset.select(range(1000)), test_examples[:1000])

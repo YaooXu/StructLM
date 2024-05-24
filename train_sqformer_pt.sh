@@ -35,14 +35,13 @@ model_name_or_path=TIGER-Lab/StructLM-7B-Mistral
 # model_name_or_path=codellama/CodeLlama-7b-Instruct-hf
         # --gradient_checkpointing \
 
-for num_query_tokens in 8 16 32 64; do
+for num_query_tokens in 10 ; do
 
     model_name=$(basename "$model_name_or_path")
 
     deepspeed --master_port=${master_port} StructQformer/train_sqformer.py \
         --model_name_or_path=${model_name_or_path} \
         --do_train \
-        --gradient_checkpointing \
         --finetuning_type=${finetuning_type} \
         --overwrite_output_dir \
         --deepspeed=${deepspeed_config_file} \

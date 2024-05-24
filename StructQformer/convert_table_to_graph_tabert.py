@@ -250,14 +250,15 @@ def obtain_samples(process_idx, idxes_to_process):
         sample = samples[idx]
 
         if "test" in path:
-            question = sample["question"] if 'question' in sample else sample['statement']
+            question = sample["formatted_input"].split('\n\n\n')[-1]
+            question = question.replace('\n\n### Response:\n', '')
+            
             table = sample["struct_in"]
             sample['label'] = sample['seq_out']
             sample['inst'] = re.findall(
                 r"([\s\S]*table:\n\n)", sample["formatted_input"])[0]
         else:
-            question = re.findall(
-                r"(question|statement):\n\n(.*)", sample["input"])[0][1]
+            question = sample["input"].split('\n\n\n')[-1]
             table = re.findall(r"table:\n\n([\s\S]*)\n\n\n", sample["input"])[0]
             # sys_prompt = '<<SYS>>\n' + sample['sys_prompt'] + '\n<</SYS>>\n\n'
             sys_prompt = 'Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.\n\n### Instruction:\n\n\n'
@@ -289,7 +290,7 @@ def obtain_samples(process_idx, idxes_to_process):
 
 if __name__ == "__main__":
 
-    output_dir = 'WTQ_Inter_opt'
+    output_dir = 'WTQ_Inter_new'
     os.makedirs(f'data/{output_dir}', exist_ok=True)
     n_process = 32
 
@@ -302,6 +303,8 @@ if __name__ == "__main__":
     # tab_tasks = ['task: wiki table question']
     for path, tab_tasks in zip(["data/processed/skginstruct_skgonly.json", "data/processed/skginstruct_test_file_mistral.json"],
                                [['wikitq'], ['task: wiki table question']]):
+    # for path, tab_tasks in zip(["data/processed/skginstruct_test_file_mistral.json"],
+    #                            [['task: wiki table question']]):
         all_samples = load_json(path)
 
         tasks_to_samples = defaultdict(list)

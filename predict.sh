@@ -1,7 +1,7 @@
 # chmod 777 /mnt/publiccache/yaoxu
 # chmod 777 /mnt/userdata
 # cd /mnt/publiccache/yaoxu/StructLM/
-# export HF_HOME=/mnt/publiccache/huggingface
+# export HF_HOME=/mnt/publiccache/huggingfacue
 
 export HF_HOME=/mnt/publiccache/huggingface
 export NCCL_P2P_DISABLE=1 NCCL_IB_DISABLE=1
@@ -23,14 +23,13 @@ num_query_tokens=10
 cross_attention_freq=1
 finetuning_type=freeze_backbone
 
-dataset_dir=data/WTQ_Inter_new
-# dataset_dir=data/5Task_Mistral
+dataset_dir=data/WTQ_ori_input
 
 wandb offline
 
-ckpt_path=/mnt/userdata/StructLM/outputs/data/WTQ_Inter_new/3_ln_StructLM-7B-Mistral_freeze_backbone_v2.6_2048_2560_10_1_0.05_2e-5/checkpoint-2831
+ckpt_path=/mnt/userdata/StructLM/outputs/data/WTQ_ori_input/3e_Llama-2-7b-hf_freeze_backbone_v2.6_2048_2560_10_1_0.05_2e-5/checkpoint-8493
 
-model_name_or_path=TIGER-Lab/StructLM-7B-Mistral
+model_name_or_path=meta-llama/Llama-2-7b-hf
 # model_name_or_path=codellama/CodeLlama-7b-Instruct-hf
         # --gradient_checkpointing \
 batch_size=2
@@ -38,9 +37,10 @@ batch_size=2
 model_name=$(basename "$model_name_or_path")
 
         # --deepspeed=${deepspeed_config_file} \
-        # --ckpt_path=${ckpt_path} \
-deepspeed --include localhost:1,2,3,4 --master_port=${master_port} StructQformer/train_sqformer.py \
+deepspeed --include localhost:0,1,2,3,4 --master_port=${master_port} StructQformer/train_sqformer.py \
         --model_name_or_path=${model_name_or_path} \
+        --ckpt_path=${ckpt_path} \
+        --finetuning_type=${finetuning_type} \
         --do_predict \
         --do_eval \
         --bf16 \
@@ -54,7 +54,7 @@ deepspeed --include localhost:1,2,3,4 --master_port=${master_port} StructQformer
         --seed=0 \
         --num_train_epochs=${num_train_epochs} \
         --per_device_train_batch_size=${batch_size} \
-        --per_device_eval_batch_size=2 \
+        --per_device_eval_batch_size=3 \
         --gradient_accumulation_steps=1 \
         --save_strategy=steps \
         --evaluation_strategy=steps \

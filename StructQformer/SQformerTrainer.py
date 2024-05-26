@@ -84,7 +84,7 @@ class PredictionProgressCallback(TrainerCallback):
         # every `freq` epochs
         if args.should_log:
             logger.info(f"epoch {state.epoch}, {self.freq}")
-            
+
         self.trainer.data_collator = DataCollatorForGenerating(self.tokenizer)
         # generate predictions
         metrics = self.trainer.predict(self.sample_dataset, self.test_examples)
@@ -103,6 +103,8 @@ def post_process_function(
         preds = preds[0]
     # Replace -100s used for padding as we can't decode them
     preds = np.where(preds != -100, preds, llm_tokenizer.pad_token_id)
+
+    logger.info(f'begin batch decode {preds.shape}')
     generated_texts = llm_tokenizer.batch_decode(preds, skip_special_tokens=False)
 
     predictions = []
@@ -118,6 +120,7 @@ def post_process_function(
             }
         )
 
+    logger.info(f'update examples')
     for i in range(len(predictions)):
         # predictions[i] = {**examples[i], **predictions[i]}
         examples[i].update(predictions[i])
@@ -233,6 +236,7 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
             cur_output_dir = f"{self.args.output_dir}/{metric_key_prefix}_{self.state.global_step}"
             os.makedirs(cur_output_dir, exist_ok=True)
 
+            logger.info(f'writing predictions.json to {cur_output_dir}')
             with open(os.path.join(cur_output_dir, "predictions.json"), "w") as f:
                 json.dump(predictions, f)
 
@@ -320,11 +324,9 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
             self.model.generation_config._from_model_config = False
 
         # Retrieves GenerationConfig from model.generation_config
+        # only new tokens are generated in StructQformerLLM
         gen_config = self.model.generation_config
-        # in case the batch is shorter than max length, the output should be padded
-        if generated_tokens.shape[-1] < gen_config.max_length:
-            generated_tokens = self._pad_tensors_to_max_len(generated_tokens, gen_config.max_length)
-        elif (
+        if (
             gen_config.max_new_tokens is not None
             and generated_tokens.shape[-1] < gen_config.max_new_tokens + 1
         ):
@@ -362,21 +364,20 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
             # Save a trained model and configuration using `save_pretrained()`.
             # They can then be reloaded using `from_pretrained()`
             if not isinstance(self.model.llm, supported_classes):
-                if state_dict is None:
-                    state_dict = self.model.llm.state_dict()
+                _state_dict = self.model.llm.state_dict()
 
                 if isinstance(unwrap_model(self.model.llm), supported_classes):
                     unwrap_model(self.model.llm).save_pretrained(
-                        output_dir, state_dict=state_dict, safe_serialization=self.args.save_safetensors
+                        output_dir, state_dict=_state_dict, safe_serialization=self.args.save_safetensors
                     )
                 else:
                     logger.info("Trainer.model is not a `PreTrainedModel`, only saving its state dict.")
-                    torch.save(state_dict, os.path.join(output_dir, WEIGHTS_NAME))
+                    torch.save(_state_dict, os.path.join(output_dir, WEIGHTS_NAME))
             else:
                 self.model.llm.save_pretrained(
-                    output_dir, state_dict=state_dict, safe_serialization=self.args.save_safetensors
-                )
-            
+                output_dir, state_dict=self.model.llm.state_dict(), safe_serialization=self.args.save_safetensors
+            )
+
         _state_dict = state_dict
         if _state_dict is None:
             # Only save the model itself if we are using distributed training

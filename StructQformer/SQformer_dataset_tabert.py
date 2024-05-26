@@ -109,50 +109,34 @@ def build_instruction_dataset(
     converter = TableConverter(bert_tokenizer)
 
     def tokenization(examples):
-        sources = []
         targets = []
         questions = []
-        insts = []
+        inputs = []
         struct_ins = []
         graphs = []
 
-        for label, question, inst, struct_in in zip(
-            examples["label"], examples["question"], examples["inst"], examples["struct_in"]
-        ):  
+        for label, question, input in zip(
+            examples["label"], examples["question"], examples["input"]
+        ):
             if num_query_tokens > 0:
-                source = f"\n\nstruct data representation tokens: {DEFAULT_GRAPH_PAD_TOKEN * num_query_tokens}\n\n\n{question}"
-            else:
-                source = f"\n\n\n{question}"
-            source += "\n\n### Response:\n"
+                idx = input.rfind('\n\n\n')
+                input = input[:idx] + \
+                    f'\n\nstruct data representation tokens: {DEFAULT_GRAPH_PAD_TOKEN * num_query_tokens}' + \
+                    input[idx:]
 
             target = f"{label}{llm_tokenizer.eos_token}"
 
             question = f'{question} query tokens: {DEFAULT_GRAPH_PAD_TOKEN * num_query_tokens}'
 
-            sources.append(source)
+            inputs.append(input)
             targets.append(target)
             questions.append(question)
-            # graphs.append(converter._text2graph(struct_in, True))
 
-            # if shuffle_desc:
-            #     node_texts = desc.split("\n")
-            #     random.shuffle(node_texts)
-            #     desc = "\n".join(node_texts)
-
-            insts.append(inst)
-            struct_ins.append(struct_in)
-        
         graphs = examples['graph']
-        
+
         # add_special_tokens=False: not add <s>
-        tokenized_insts = llm_tokenizer(
-            insts, return_attention_mask=False, add_special_tokens=False
-        )
-        tokenized_struct_ins = llm_tokenizer(
-            struct_ins, return_attention_mask=False, add_special_tokens=False
-        )
-        tokenized_sources = llm_tokenizer(
-            sources, return_attention_mask=False, add_special_tokens=False
+        tokenized_inputs = llm_tokenizer(
+            inputs, return_attention_mask=False, add_special_tokens=False
         )
         tokenized_targets = llm_tokenizer(
             targets, return_attention_mask=False, add_special_tokens=False
@@ -165,14 +149,12 @@ def build_instruction_dataset(
 
         # lens = []
 
-        for inst, struct_in, s, t, q in zip(
-            tokenized_insts["input_ids"],
-            tokenized_struct_ins["input_ids"],
-            tokenized_sources["input_ids"],
+        for input, t, q in zip(
+            tokenized_inputs["input_ids"],
             tokenized_targets["input_ids"],
             tokenized_questions["input_ids"],
         ):
-            s = [llm_tokenizer.bos_token_id] + inst + struct_in[:max_desc_length] + s
+            s = [llm_tokenizer.bos_token_id] + input
             if training:
                 input_ids = torch.LongTensor(s + t)[:max_seq_length]
                 labels = torch.LongTensor([IGNORE_INDEX] * len(s) + t)[:max_seq_length]
@@ -181,6 +163,7 @@ def build_instruction_dataset(
                 labels = torch.LongTensor([IGNORE_INDEX] * len(s))[:max_seq_length]
 
             question_ids = torch.LongTensor(q)
+            assert len(input_ids) < max_seq_length
             assert len(input_ids) == len(labels)
 
             all_input_ids.append(input_ids)
@@ -195,7 +178,7 @@ def build_instruction_dataset(
 
         for i, graph in enumerate(graphs):
             num_nodes = len(graph["node_types"])
-            
+
             graph["node_types"] = torch.LongTensor(graph["node_types"])
             graph["graph_attention_mask"] = torch.LongTensor([1] * num_nodes)
             # -1 -> 0
@@ -221,8 +204,8 @@ def build_instruction_dataset(
             data_cache_dir = str(os.path.dirname(file))
         cache_path = os.path.join(
             data_cache_dir,
-            os.path.basename(file).split(".")[0] + \
-                f"{max_desc_length}_{max_seq_length}_{num_query_tokens}_{llm_tokenizer.name_or_path.split('/')[-1]}",
+            os.path.basename(file).split(".")[0] +
+            f"{max_desc_length}_{max_seq_length}_{num_query_tokens}_{llm_tokenizer.name_or_path.split('/')[-1]}",
         )
         os.makedirs(cache_path, exist_ok=True)
         try:
@@ -321,14 +304,14 @@ if __name__ == "__main__":
 
     set_seed(0)
 
-    dataset_dir = pathlib.Path("data/WTQ_Inter_opt_exp")
+    dataset_dir = pathlib.Path("data/WTQ_ori_input")
 
     llm_tokenizer = AutoTokenizer.from_pretrained("TIGER-Lab/StructLM-7B-Mistral", use_fast=False)
     bert_tokenizer = AutoTokenizer.from_pretrained("google-bert/bert-base-uncased", use_fast=False)
 
     graph_pad_token = DEFAULT_GRAPH_PAD_TOKEN
     bert_tokenizer.add_tokens(
-        new_tokens = ["[TAB]", "[HEAD]", "[CELL]", "[ROW]", "scinotexp"],
+        new_tokens=["[TAB]", "[HEAD]", "[CELL]", "[ROW]", "scinotexp"],
         special_tokens=True,
     )
     llm_tokenizer.add_tokens([graph_pad_token], special_tokens=True)
@@ -337,7 +320,7 @@ if __name__ == "__main__":
     max_seq_length = 2560
     max_desc_length = 2048
     num_query_tokens = 10
-    preprocessing_num_workers = 1
+    preprocessing_num_workers = 16
     reprocess = True
     train_dataset = build_instruction_dataset(
         dataset_dir / f"train.pq",

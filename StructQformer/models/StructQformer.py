@@ -206,6 +206,7 @@ class StructQformerLLM(nn.Module):
         self.llm_graph_pad_token_id = None
         self.llm_pad_token_id = None
         self.finetuning_type = args.finetuning_type
+        self.args = args
 
         if self.num_query_tokens > 0:
             self.qformer = StructQformer(args, hypergraph_enc_config)
@@ -216,23 +217,11 @@ class StructQformerLLM(nn.Module):
                 0
             ]
             self.qformer.resize_token_embeddings(len(bert_tokenizer))
-            # if self.qformer.hypergraph_encoder:
-            #     # load graph encoder
-            #     logger.info(f"loading hypergraph_encoder ckpt")
-            #     state_dict = torch.load(
-            #         open(
-            #             'models/ckpts/hytrel/mp_rank_00_model_states.pt',
-            #             "rb",
-            #         )
-            #     )
 
-            #     new_state_dict = OrderedDict()
-            #     logger.info(f"loading graph encoder")
-            #     for k, v in state_dict["module"].items():
-            #         if "model" in k:
-            #             name = k[13:]  # remove `module.model.`
-            #             new_state_dict[name] = v
-            #     self.qformer.hypergraph_encoder.load_state_dict(new_state_dict, strict=True)
+            if args.ckpt_path is not None and not args.skip_graph_encoder:
+                logger.info(f"loading qformer ckpt from {args.ckpt_path}")
+                self.qformer.load_state_dict(torch.load(os.path.join(args.ckpt_path, "Qformer.bin")))
+
         else:
             self.qformer = None
 
@@ -246,21 +235,21 @@ class StructQformerLLM(nn.Module):
             for name, param in self.llm.named_parameters():
                 param.requires_grad = True
         elif args.finetuning_type == 'lora':
-            logger.info('loading lora model')
-            peft_config = LoraConfig(
-                task_type=TaskType.CAUSAL_LM,
-                inference_mode=False,
-                target_modules=args.target_modules.split(','),
-                r=8,
-                lora_alpha=16,
-                lora_dropout=0.05
-            )
-            self.llm = get_peft_model(self.llm, peft_config)
-            self.llm.print_trainable_parameters()
-
             if args.ckpt_path is not None:
                 logger.info(f'loading lora ckpt from {args.ckpt_path}')
                 self.llm.load_adapter(args.ckpt_path)
+            else:
+                logger.info('adding lora model')
+                peft_config = LoraConfig(
+                    task_type=TaskType.CAUSAL_LM,
+                    inference_mode=False,
+                    target_modules=args.target_modules.split(','),
+                    r=8,
+                    lora_alpha=16,
+                    lora_dropout=0.05
+                )
+                self.llm = get_peft_model(self.llm, peft_config)
+                self.llm.print_trainable_parameters()
 
         elif args.finetuning_type == 'freeze_backbone':
             for name, param in self.llm.named_parameters():

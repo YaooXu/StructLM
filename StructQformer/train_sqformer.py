@@ -182,10 +182,6 @@ if __name__ == "__main__":
                              use_cache=False if training_args.gradient_checkpointing else True,
                              torch_dtype=torch_dtype)
 
-    if model_args.ckpt_path is not None and not model_args.skip_graph_encoder:
-        logger.info(f"loading qformer ckpt from {model_args.ckpt_path}")
-        model.qformer.load_state_dict(torch.load(os.path.join(model_args.ckpt_path, "Qformer.bin")))
-
     # for name, module in model.named_modules():
     #     if isinstance(module, LoraLayer):
     #         if training_args.bf16:
@@ -224,7 +220,7 @@ if __name__ == "__main__":
             max_desc_length=data_args.max_desc_length,
             num_query_tokens=model_args.num_query_tokens,
         )
-        # eval_dataset = eval_dataset.select(random.sample(range(len(eval_dataset)), k=1000))
+        eval_dataset = eval_dataset.select(random.sample(range(len(eval_dataset)), k=4000))
 
     if training_args.do_train or training_args.do_predict:
         test_dataset = build_instruction_dataset(
@@ -270,4 +266,4 @@ if __name__ == "__main__":
     elif training_args.do_predict:
         trainer.data_collator = DataCollatorForGenerating(llm_tokenizer)
         logger.info("*** Predict ***")
-        metrics = trainer.predict(test_dataset.select(range(1000)), test_examples[:1000])
+        metrics = trainer.predict(test_dataset, test_examples)

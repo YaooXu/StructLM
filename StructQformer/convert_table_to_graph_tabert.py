@@ -3,6 +3,7 @@ import sys
 import time
 
 import numpy as np
+
 sys.path.append('./')
 
 import os
@@ -250,25 +251,20 @@ def obtain_samples(process_idx, idxes_to_process):
         sample = samples[idx]
 
         if "test" in path:
-            question = sample["formatted_input"].split('\n\n\n')[-1]
-            question = question.replace('\n\n### Response:\n', '')
-            
+            question = sample['question']
             table = sample["struct_in"]
             sample['label'] = sample['seq_out']
-            sample['inst'] = re.findall(
-                r"([\s\S]*table:\n\n)", sample["formatted_input"])[0]
+            sample["input"] = sample["formatted_input"]
+            # print(sample["formatted_input"])
         else:
-            question = sample["input"].split('\n\n\n')[-1]
-            table = re.findall(r"table:\n\n([\s\S]*)\n\n\n", sample["input"])[0]
-            # sys_prompt = '<<SYS>>\n' + sample['sys_prompt'] + '\n<</SYS>>\n\n'
-            sys_prompt = 'Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.\n\n### Instruction:\n\n\n'
-            sample["inst"] = sys_prompt + re.findall(
-                r"([\s\S]*table:\n\n)", sample["input"])[0]
+            # idx = sample["input"].rfind('\n\n\n')
+            # new_input = sample["input"][:idx] + f"\n\nstruct data representation tokens: {DEFAULT_GRAPH_PAD_TOKEN * 10}'
 
-        # print(sample['inst'])
-        # print(table)
-        # print(question)
-        # print(sample['label'])
+            question = sample["input"].split('\n\n')[-1]
+            table = re.findall(r"table:\n\n([\s\S]*)\n\n\n", sample["input"])[0]
+            sys_prompt = 'Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.\n\n### Instruction:\n\n\n'
+            sample["input"] = sys_prompt + sample["input"] + "\n\n### Response:\n"
+            # print(sample['input'])
 
         sample["question"] = question
 
@@ -290,7 +286,7 @@ def obtain_samples(process_idx, idxes_to_process):
 
 if __name__ == "__main__":
 
-    output_dir = 'WTQ_Inter_new'
+    output_dir = 'WTQ_ori_input'
     os.makedirs(f'data/{output_dir}', exist_ok=True)
     n_process = 32
 
@@ -302,9 +298,9 @@ if __name__ == "__main__":
     # tab_tasks = ['task: tabfact', 'task: wiki table question', 'task: wikisql']
     # tab_tasks = ['task: wiki table question']
     for path, tab_tasks in zip(["data/processed/skginstruct_skgonly.json", "data/processed/skginstruct_test_file_mistral.json"],
-                               [['wikitq'], ['task: wiki table question']]):
+                               [['wikitq'],['task: wiki table question']]):
     # for path, tab_tasks in zip(["data/processed/skginstruct_test_file_mistral.json"],
-    #                            [['task: wiki table question']]):
+    #                             [['task: wiki table question']]):
         all_samples = load_json(path)
 
         tasks_to_samples = defaultdict(list)
@@ -347,12 +343,12 @@ if __name__ == "__main__":
         print(len(new_samples))
 
         if "test" in path:
-            if len(tab_tasks) > 1:
-                random.shuffle(new_samples)
+            # if len(tab_tasks) > 1:
+            #     random.shuffle(new_samples)
 
             df = pd.DataFrame(new_samples)
 
-            remain_keys = ['label', 'question', 'inst', 'struct_in', 'graph']
+            remain_keys = ['label', 'question', 'input', 'struct_in', 'graph']
             sub_df = df[remain_keys]
             sub_df.to_parquet(f'data/{output_dir}/test.pq', engine='pyarrow', index=False)
             sub_df.to_parquet(f'data/{output_dir}/val.pq', engine='pyarrow', index=False)

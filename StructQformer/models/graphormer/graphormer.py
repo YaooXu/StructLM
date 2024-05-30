@@ -78,7 +78,7 @@ class BertEmbeddings(nn.Module):
 
         if position_ids is None:
             position_ids = self.position_ids[
-                :, past_key_values_length : seq_length + past_key_values_length
+                :, past_key_values_length: seq_length + past_key_values_length
             ]
 
         # Setting the token_type_ids to the registered buffer in constructor where it is all zeros, which usually occurs
@@ -622,14 +622,16 @@ class Graphormer(nn.Module):
             batch, seq_length = graph_attention_mask.shape
 
             word_embeddings: nn.Embedding = self.model.get_input_embeddings()
+
             node_embeds = torch.zeros(
                 (batch, seq_length, self.config.hidden_size), dtype=word_embeddings.weight.dtype
             ).to(self.model.device)
             for i in range(batch):
                 mask = (node_ids[i] != 0).int().unsqueeze(-1)
                 embeds = (word_embeddings(node_ids[i]) * mask).sum(dim=1)
-                embeds = embeds / mask.sum(dim=1)
-                node_embeds[i, : embeds.shape[0], :] = embeds
+                assert (mask.sum(1) == 0).sum().item() == 0
+                embeds = embeds / mask.sum(1)
+                node_embeds[i, : embeds.shape[0], :] += embeds
         else:
             node_embeds = graphs["node_attrs"]
 

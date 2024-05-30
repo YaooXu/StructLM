@@ -55,10 +55,7 @@ def merge_graph(graphs: List[Dict]):
     key_to_array = {}
     for key, lists in key_to_lists.items():
         if key == "node_token_ids":
-            key_to_array[key] = [
-                torch.nn.utils.rnn.pad_sequence(node_token_ids, batch_first=True)
-                for node_token_ids in lists
-            ]
+            key_to_array[key] = lists
         elif key in ["node_types", "graph_attention_mask"]:
             key_to_array[key] = torch.nn.utils.rnn.pad_sequence(lists, batch_first=True)
         elif key == "dist_mat":
@@ -104,6 +101,8 @@ def build_instruction_dataset(
         preprocessing_num_workers (int, optional): _description_. Defaults to 10.
     """
 
+    return GraphDataset(data_path, llm_tokenizer, bert_tokenizer, num_query_tokens, max_seq_length, training)
+
     assert max_seq_length > max_desc_length
 
     converter = TableConverter(bert_tokenizer)
@@ -126,7 +125,8 @@ def build_instruction_dataset(
 
             target = f"{label}{llm_tokenizer.eos_token}"
 
-            question = f'{question} query tokens: {DEFAULT_GRAPH_PAD_TOKEN * num_query_tokens}'
+            # question = f'{question} query tokens: {DEFAULT_GRAPH_PAD_TOKEN * num_query_tokens}'
+            question = f'{question} query tokens: '
 
             inputs.append(input)
             targets.append(target)
@@ -141,7 +141,7 @@ def build_instruction_dataset(
         tokenized_targets = llm_tokenizer(
             targets, return_attention_mask=False, add_special_tokens=False
         )
-        tokenized_questions = llm_tokenizer(questions)
+        tokenized_questions = bert_tokenizer(questions)
 
         all_input_ids = []
         all_labels = []
@@ -229,6 +229,81 @@ def build_instruction_dataset(
     return all_datasets
 
 
+class GraphDataset(Dataset):
+    def __init__(self, data_path, llm_tokenizer, bert_tokenizer, num_query_tokens=10, max_seq_length=2560, training=True) -> None:
+        self.raw_dataset = load_dataset("parquet", data_files=str(data_path))['train']
+        self.llm_tokenizer = llm_tokenizer
+        self.bert_tokenizer = bert_tokenizer
+        self.num_query_tokens = num_query_tokens
+        self.max_seq_length = max_seq_length
+        self.training = training
+
+    def __getitem__(self, index):
+        sample = self.raw_dataset[index]
+
+        input = sample['input']
+        if self.num_query_tokens > 0:
+            idx = input.rfind('\n\n\n')
+            input = input[:idx] + \
+                f'\n\nstruct data representation tokens: {DEFAULT_GRAPH_PAD_TOKEN * self.num_query_tokens}' + \
+                input[idx:]
+        tokenized_input = self.llm_tokenizer(
+            input, return_attention_mask=False, add_special_tokens=False
+        )
+
+        target = f"{sample['label']}{self.llm_tokenizer.eos_token}"
+        tokenized_target = self.llm_tokenizer(
+            target, return_attention_mask=False, add_special_tokens=False
+        )
+
+        question = sample['question']
+        question = ' '.join(question.split()[:64])
+        question = f'The query tokens for this "{question}" is {DEFAULT_GRAPH_PAD_TOKEN * self.num_query_tokens}'
+        tokenized_question = self.llm_tokenizer(question, return_attention_mask=False, add_special_tokens=False)
+
+        # print(question)
+
+        s = tokenized_input["input_ids"]
+        t = tokenized_target["input_ids"]
+        q = tokenized_question["input_ids"]
+
+        max_seq_length = self.max_seq_length
+        s = [self.llm_tokenizer.bos_token_id] + s
+        if self.training:
+            input_ids = torch.LongTensor(s + t)[:max_seq_length]
+            labels = torch.LongTensor([IGNORE_INDEX] * len(s) + t)[:max_seq_length]
+        else:
+            input_ids = torch.LongTensor(s)[:max_seq_length]
+            labels = torch.LongTensor([IGNORE_INDEX] * len(s))[:max_seq_length]
+        q = [self.llm_tokenizer.bos_token_id] + q
+        question_ids = torch.LongTensor(q)
+
+        graph = sample['graph']
+
+        num_nodes = len(graph["node_types"])
+
+        num_nodes = min(num_nodes, 512)
+        graph["node_types"] = torch.LongTensor(graph["node_types"])[:num_nodes]
+        graph["graph_attention_mask"] = torch.LongTensor([1] * num_nodes)
+        # -1 -> 0
+        graph["node_token_ids"] = torch.LongTensor(graph["node_token_ids"])[:num_nodes, :]
+        graph["dist_mat"] = torch.LongTensor(graph["dist_mat"])[:num_nodes, :num_nodes]
+
+        item = {
+            "input_ids": input_ids,
+            "labels": labels,
+            "question_ids": question_ids,
+            "graph": graph,
+        }
+        return item
+
+    def select(self, idxes):
+        self.raw_dataset = self.raw_dataset.select(idxes)
+        return self
+    
+    def __len__(self):
+        return len(self.raw_dataset)
+
 @dataclass
 class DataCollatorForGraphSupervisedDataset(object):
     """Collate examples for supervised fine-tuning."""
@@ -259,7 +334,8 @@ class DataCollatorForGraphSupervisedDataset(object):
         graphs = [instance["graph"] for instance in instances]
 
         graphs = merge_graph(graphs)
-
+        # print(graphs['dist_mat'].shape)
+        
         # Qformer input
         question_ids = [instance["question_ids"] for instance in instances]
         question_ids = self.llm_tokenizer.pad({"input_ids": question_ids})["input_ids"]
@@ -304,9 +380,9 @@ if __name__ == "__main__":
 
     set_seed(0)
 
-    dataset_dir = pathlib.Path("data/WTQ_ori_input")
+    dataset_dir = pathlib.Path("data/8Tab_tasks_ori_input_no_inter")
 
-    llm_tokenizer = AutoTokenizer.from_pretrained("TIGER-Lab/StructLM-7B-Mistral", use_fast=False)
+    llm_tokenizer = AutoTokenizer.from_pretrained('meta-llama/Llama-2-7b-hf', use_fast=False)
     bert_tokenizer = AutoTokenizer.from_pretrained("google-bert/bert-base-uncased", use_fast=False)
 
     graph_pad_token = DEFAULT_GRAPH_PAD_TOKEN
@@ -319,9 +395,9 @@ if __name__ == "__main__":
 
     max_seq_length = 2560
     max_desc_length = 2048
-    num_query_tokens = 10
-    preprocessing_num_workers = 16
-    reprocess = True
+    num_query_tokens = 0
+    preprocessing_num_workers = 40
+    reprocess = False
     train_dataset = build_instruction_dataset(
         dataset_dir / f"train.pq",
         llm_tokenizer,

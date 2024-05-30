@@ -94,37 +94,38 @@ class StructQformer(nn.Module):
         if self.strategy[:2] == "v2":
             # self.hypergraph_encoder = HyperGraphEncoder(hypergraph_enc_config)
             self.graph_encoder = Graphormer(args.encoder_model_path)
-
+                
             self.model = BertLMHeadModel.from_pretrained(
                 self.encoder_model_path, config=self.encoder_config
             )
             self.query_token_embeds = nn.Parameter(
                 torch.zeros(self.num_query_tokens, self.encoder_config.hidden_size)
             )
-            self.projector1 = nn.Linear(4096, self.encoder_config.hidden_size)
-            self.projector2 = nn.Linear(self.encoder_config.hidden_size, 4096)
-
-            self.ln_norm1 = nn.LayerNorm(768)
-            self.ln_norm2 = nn.LayerNorm(4096)
-
             self.query_embeds_generator = QueryEmbedsGenerator(self.num_query_tokens)
         else:
             self.graph_encoder = None
             self.model = None
-            self.projector1 = None
-            self.projector2 = nn.Linear(self.encoder_config.hidden_size, 4096)
             self.query_token_embeds = nn.Parameter(torch.zeros(self.num_query_tokens, 4096))
+
+        self.projector1 = nn.Linear(4096, self.encoder_config.hidden_size)
+        self.projector2 = nn.Linear(self.encoder_config.hidden_size, 4096)
+
+        self.ln_norm1 = nn.LayerNorm(768, self.encoder_config.layer_norm_eps)
+        self.ln_norm2 = nn.LayerNorm(4096, self.encoder_config.layer_norm_eps)
 
         self.init_weight()
 
     def init_weight(self):
         self.query_token_embeds.data.normal_(mean=0.0, std=self.encoder_config.initializer_range)
         for proj in [self.projector1, self.projector2]:
-            if proj is not None:
-                proj.weight.data.normal_(
-                    mean=0.0, std=self.encoder_config.initializer_range)
-                if proj.bias is not None:
-                    proj.bias.data.zero_()
+            proj.weight.data.normal_(
+                mean=0.0, std=self.encoder_config.initializer_range)
+            if proj.bias is not None:
+                proj.bias.data.zero_()
+                
+        for ln in [self.ln_norm1, self.ln_norm2]:
+            ln.bias.data.zero_()
+            ln.weight.data.fill_(1.0)
 
     def resize_token_embeddings(self, new_num_tokens):
         if self.graph_encoder:
@@ -161,14 +162,37 @@ class StructQformer(nn.Module):
             graph_embeds = self.graph_encoder(graph['graph'])
             graph_attention_mask = graph['graph']["graph_attention_mask"]
 
-            # from bf16 fp32
+            # from bf16 to fp32
             query_embeds = self.query_embeds_generator(
                 graph, llm, llm_graph_pad_token_id).to(graph_embeds.dtype)
             query_embeds = self.projector1(query_embeds)
             query_embeds = self.ln_norm1(query_embeds)
+            
+            # question_embeds = self.model.bert.embeddings(question_ids)
+            
+            # # add ln and dp
+            # query_embeds = self.model.bert.embeddings(input_embeds=self.query_token_embeds)
+            # query_embeds = query_embeds.unsqueeze(0).expand(batch_size, -1, -1)
+            # # print(query_embeds[0].norm(dim=-1).detach())
+            # # print(self.projector2.weight.data[0].detach())
+            
+            # input_embeds = torch.cat([question_embeds, query_embeds], dim=1)
+            # query_atts = torch.ones(query_embeds.shape[:-1]).to(self.device)
+            # attention_mask = torch.cat([graph["question_attention_mask"], query_atts], dim=1)
 
+            # print(input_embeds.norm(dim=-1).detach())
+            
+            # hidden_states = self.model.bert(
+            #     input_embeds=input_embeds,
+            #     attention_mask=attention_mask,
+            #     # encoder_hidden_states=graph_embeds,
+            #     # encoder_attention_mask=graph_attention_mask,
+            #     # query_length=self.num_query_tokens,
+            # ).last_hidden_state
+            # query_embeds = hidden_states[:, -self.num_query_tokens:, :]
+            # res_embeds = query_embeds
+            
             query_atts = torch.ones(query_embeds.shape[:-1]).to(self.device)
-
             question_output = self.model.bert(
                 input_embeds=query_embeds,
                 attention_mask=query_atts,
@@ -181,7 +205,7 @@ class StructQformer(nn.Module):
 
         res_embeds = self.projector2(res_embeds)
         res_embeds = self.ln_norm2(res_embeds)
-
+        
         return res_embeds
 
     def forward(self, graph, llm, llm_graph_pad_token_id):
@@ -218,6 +242,8 @@ class StructQformerLLM(nn.Module):
             ]
             self.qformer.resize_token_embeddings(len(bert_tokenizer))
 
+            # self.qformer.load_state_dict(torch.load(os.path.join('/mnt/userdata/StructLM/outputs/data/WTQ_ori_input_no_inter/3e_bi_Llama-2-7b-hf_freeze_backbone_v2.6_2048_2560_10_1_0.05_2e-5/checkpoint-8493', "Qformer.bin")))
+                        
             if args.ckpt_path is not None and not args.skip_graph_encoder:
                 logger.info(f"loading qformer ckpt from {args.ckpt_path}")
                 self.qformer.load_state_dict(torch.load(os.path.join(args.ckpt_path, "Qformer.bin")))
@@ -227,6 +253,7 @@ class StructQformerLLM(nn.Module):
 
         self.llm: LlamaForCausalLM = AutoModelForCausalLM.from_pretrained(
             args.model_name_or_path,
+            # use_flash_attention_2=True,
             **kwargs
         )
         self.init_tokenizer_and_embeds(llm_tokenizer, bert_tokenizer, DEFAULT_GRAPH_PAD_TOKEN)
@@ -250,7 +277,6 @@ class StructQformerLLM(nn.Module):
                 )
                 self.llm = get_peft_model(self.llm, peft_config)
                 self.llm.print_trainable_parameters()
-
         elif args.finetuning_type == 'freeze_backbone':
             for name, param in self.llm.named_parameters():
                 param.requires_grad = False

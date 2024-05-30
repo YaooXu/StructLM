@@ -41,13 +41,15 @@ _DESCRIPTION = """\
 BIRD (BIg Bench for LaRge-scale Database Grounded Text-to-SQL Evaluation) represents a pioneering, cross-domain dataset that examines the impact of extensive database contents on text-to-SQL parsing. BIRD contains over 12,751 unique question-SQL pairs, 95 big databases with a total size of 33.4 GB. It also covers more than 37 professional domains, such as blockchain, hockey, healthcare and education, etc.
 """
 
-_HOMEPAGE = "https://bird-bench.github.io/"
+_HOMEPAGE = "https://promptpg.github.io/index.html"
 
 _LICENSE = "CC BY-NC 4.0"  # non commercial
 
 
-_URL = "https://drive.google.com/uc?export=download&id=1bXF3zsKqso6zfweZ2EfyNo9z9WpX6M74"
-
+_URL = "https://raw.githubusercontent.com/lupantech/PromptPG/main/data/tabmwp/"
+_TRAIN_URL = f"{_URL}/problems_train.json"
+_DEV_URL = f"{_URL}/problems_dev.json"
+_TEST_URL = f"{_URL}/problems_test.json"
 
             #     "query" : datasets.Value("string"),
             #     "question": datasets.Value("string"),
@@ -96,7 +98,8 @@ class TabMWP(datasets.GeneratorBasedBuilder):
                 'answer': datasets.Value("string"),
                 'unit': datasets.Value("string"),
                 'table_title': datasets.Value("string"),
-                'table': datasets.Value("string"),
+                "table": {"header": datasets.features.Sequence(datasets.Value("string")),
+                          "rows": datasets.features.Sequence(datasets.features.Sequence(datasets.Value("string")))},
                 # table for pd is a dictionary of lists. we will just store the string in here and eval it later as a hack
                 'table_for_pd': datasets.Value("string"),
                 'row_num': datasets.Value("int32"),
@@ -115,31 +118,49 @@ class TabMWP(datasets.GeneratorBasedBuilder):
             license=_LICENSE,
             citation=_CITATION,
         )
-
+    
     def _split_generators(self, dl_manager):
         # downloaded_filepath_train = dl_manager.download_and_extract(_TRAINURL)
         # TODO: we only load the dev data for now, we are holding out this dataset
-        downloaded_filepath = dl_manager.download_and_extract(_URL)
+        extracted_path = dl_manager.download_and_extract(
+            {'train_path': _TRAIN_URL, 'dev_path': _DEV_URL, 'test_path': _TEST_URL}
+        )
 
         return [
             datasets.SplitGenerator(
                 name=datasets.Split.TRAIN,
-                gen_kwargs={
-                    "data_filepath": downloaded_filepath + "/tabmwp/problems_train.json",
-                },
+                gen_kwargs={"path": extracted_path['train_path']},
             ),
             datasets.SplitGenerator(
                 name=datasets.Split.VALIDATION,
-                gen_kwargs={
-                    "data_filepath": downloaded_filepath + "/tabmwp/problems_dev.json",
-                },
+                gen_kwargs={"path": extracted_path['dev_path']},
+            ),
+            datasets.SplitGenerator(
+                name=datasets.Split.TEST,
+                gen_kwargs={"path": extracted_path['test_path']},
             ),
         ]
 
-    def _generate_examples(self, data_filepath):
+    def _convert_to_table(self, data):
+        header = list(data.keys())
+        
+        rows = []
+        num_rows = len(data[header[0]])
+        for i in range(num_rows):
+            row = [data[key][i] for key in header]
+            rows.append(row)
+        
+        table = {
+            "header": header,
+            "rows": rows
+        }
+        
+        return table
+    
+    def _generate_examples(self, path):
         """This function returns the examples in the raw (text) form."""
-        logger.info("generating examples from = %s", data_filepath)
-        with open(data_filepath, encoding="utf-8") as f:
+        logger.info("generating examples from = %s", path)
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
             for k, v in data.items():
                 # tabmwp data is 1 indexed for some reason
@@ -149,7 +170,7 @@ class TabMWP(datasets.GeneratorBasedBuilder):
                     'answer': v['answer'],
                     'unit': v['unit'],
                     'table_title': v['table_title'],
-                    'table': v['table'],
+                    'table': self._convert_to_table(v['table_for_pd']),
                     'table_for_pd': str(v['table_for_pd']), # Hack
                     'row_num': v['row_num'],
                     'column_num': v['column_num'],

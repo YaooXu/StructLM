@@ -22,6 +22,7 @@ from torch_geometric.data import Data
 from easydict import EasyDict
 from transformers import AutoTokenizer
 from multiprocessing import Pool
+from datasets import load_dataset
 
 # constants
 CAP_TAG = "<caption>"
@@ -145,13 +146,19 @@ class TableConverter:
 
         return cap, headers, cells
 
-    def _text2graph(self, table_str, get_dist_mat=True):
+    def _text2graph(self, table, get_dist_mat=True):
 
-        table_str = table_str.replace("col :", "<caption> [TAB] <header>")
-        table_str = re.sub(r"row\s\d+\s:", "<row>", table_str)
 
         try:
-            cap, headers, data = self._text2table(table_str)
+            if type(table) is str:
+                table = table.replace("col :", "<caption> [TAB] <header>")
+                table = re.sub(r"row\s\d+\s:", "<row>", table)
+                cap, headers, data = self._text2table(table)
+            else:
+                if type(table['header'][0]) == list:
+                    table['header'], table['rows'] = table['header'][0], table['rows'][0]
+                cap = ''
+                headers, data = table['header'], table['rows']
 
             # filter too long caption
             cap = " ".join(cap.split()[: self.data_args.max_token_length])
@@ -179,6 +186,8 @@ class TableConverter:
                     mask_all.append(mask)
                 else:
                     wordpieces, mask = self._tokenize_word(head)
+                    if wordpieces == ['[PAD]'] * self.data_args.max_token_length:
+                        wordpieces[0] = '[HEAD]'
                     wordpieces_all.append(wordpieces)
                     mask_all.append(mask)
                 node_types.append(0)
@@ -197,7 +206,8 @@ class TableConverter:
                 for col_i, word in enumerate(row):
                     col_node_id = col_i
 
-                    if word.strip() in ['-', '']:
+                    word = word.strip() 
+                    if word in ['-', '']:
                         wordpieces = ["[CELL]"] + [
                             "[PAD]" for _ in range(self.data_args.max_token_length - 1)
                         ]
@@ -206,6 +216,10 @@ class TableConverter:
                         word = " ".join(word.split()[: self.data_args.max_token_length])
                         wordpieces, mask = self._tokenize_word(word)
 
+                    # some special unicode may lead to this, WTF
+                    if wordpieces == ['[PAD]'] * self.data_args.max_token_length:
+                        wordpieces[0] = '[CELL]'
+                    
                     node_id = len(wordpieces_all)
                     wordpieces_all.append(wordpieces)
                     mask_all.append(mask)
@@ -219,10 +233,14 @@ class TableConverter:
 
             node_token_ids = torch.tensor(
                 [self.tokenizer.convert_tokens_to_ids(x) for x in wordpieces_all], dtype=torch.long
-            ).numpy()
+            )
             edge_index = np.array(edge_index).T
             node_types = np.array(node_types)
             dist_mat = _get_dist_mat(len(wordpieces_all), edge_index)
+
+            # check all 0 input
+            xs_tem = torch.count_nonzero(node_token_ids, dim=1)
+            assert torch.count_nonzero(xs_tem) == len(xs_tem)
 
             graph = {
                 "edge_index": edge_index.tolist(),
@@ -232,7 +250,8 @@ class TableConverter:
             }
 
             return graph
-        except:
+        except Exception as e:
+            print(e)
             print("Fail to parser the table...")
             # cap, headers, data = self._text2table(table_str)
             return None
@@ -251,17 +270,20 @@ def obtain_samples(process_idx, idxes_to_process):
         sample = samples[idx]
 
         if "test" in path:
-            question = sample['question']
-            table = sample["struct_in"]
+            question = sample['question'] if 'question' in sample else sample['statement']
+            table = sample["table"]
             sample['label'] = sample['seq_out']
             sample["input"] = sample["formatted_input"]
             # print(sample["formatted_input"])
         else:
-            # idx = sample["input"].rfind('\n\n\n')
-            # new_input = sample["input"][:idx] + f"\n\nstruct data representation tokens: {DEFAULT_GRAPH_PAD_TOKEN * 10}'
+            train_data = train_dataset[idx]
 
             question = sample["input"].split('\n\n')[-1]
-            table = re.findall(r"table:\n\n([\s\S]*)\n\n\n", sample["input"])[0]
+            assert question.lower().strip() == (train_data['question'] if 'question' in train_data else train_data['statement']).lower().strip()
+            
+            table = train_data['table']
+            
+            # table = re.findall(r"table:\n\n([\s\S]*)\n\n\n", sample["input"])[0]
             sys_prompt = 'Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.\n\n### Instruction:\n\n\n'
             sample["input"] = sys_prompt + sample["input"] + "\n\n### Response:\n"
             # print(sample['input'])
@@ -271,7 +293,7 @@ def obtain_samples(process_idx, idxes_to_process):
         graph = converter._text2graph(table, True)
         if graph:
             sample['graph'] = graph
-            sample["struct_in"] = table
+            # sample["struct_in"] = table
             new_samples.append(sample)
 
             if "test" in path:
@@ -286,22 +308,29 @@ def obtain_samples(process_idx, idxes_to_process):
 
 if __name__ == "__main__":
 
-    output_dir = 'WTQ_ori_input'
+    output_dir = '8Tab_tasks_ori_input_no_inter'
     os.makedirs(f'data/{output_dir}', exist_ok=True)
-    n_process = 32
+    n_process = 40
 
     # path = "data/processed/skginstruct_skgonly.json"
-    # tab_tasks = ['tab_fact', 'wikitq', 'wikisql', 'tabmwp', 'fetaqa']
+    # tab_tasks = ['fetaqa', 'hybridqa', 'wikitq', 'tabmwp', 'mmqa', 'wikisql', 'tab_fact', 'feverous']
     # tab_tasks = ['wikitq']
 
     # path = "data/processed/skginstruct_test_file_mistral.json"
     # tab_tasks = ['task: tabfact', 'task: wiki table question', 'task: wikisql']
     # tab_tasks = ['task: wiki table question']
-    for path, tab_tasks in zip(["data/processed/skginstruct_skgonly.json", "data/processed/skginstruct_test_file_mistral.json"],
-                               [['wikitq'],['task: wiki table question']]):
-    # for path, tab_tasks in zip(["data/processed/skginstruct_test_file_mistral.json"],
-    #                             [['task: wiki table question']]):
-        all_samples = load_json(path)
+
+    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    new_tokens = ["[TAB]", "[HEAD]", "[CELL]", "[ROW]", "scinotexp"]
+    tokenizer.add_tokens(new_tokens, special_tokens=True)
+
+    converter = TableConverter(tokenizer)
+
+    # for path, tab_tasks in zip(["data/processed/skginstruct_skgonly.json", "data/processed/skginstruct_test_file_mistral.json"],
+    #                            [['fetaqa', 'hybridqa', 'wikitq', 'tabmwp', 'wikisql', 'tab_fact', 'feverous'], ['task: wiki table question']]):
+    for path, tab_tasks in zip(["data/processed/skginstruct_test_file_mistral.json"],
+                                [['task: wiki table question', 'task: wikisql', 'task: tabfact']]):
+        all_samples = load_json(path=path)
 
         tasks_to_samples = defaultdict(list)
         for sample in all_samples:
@@ -309,46 +338,49 @@ if __name__ == "__main__":
                 tasks_to_samples[sample["description"]].append(sample)
             else:
                 tasks_to_samples[sample["task_name"]].append(sample)
+
         print(list(tasks_to_samples.keys()))
 
-        samples = []
+        all_samples = []
         for task in tab_tasks:
-            samples.extend(tasks_to_samples[task])
+            samples = tasks_to_samples[task]
+            
+            if 'test' not in path:
+                train_dataset = load_dataset(f'tasks/{task}.py')['train']
+                assert len(train_dataset) == len(samples)
+            else:
+                train_dataset = None
 
-        num_samples = len(samples)
-        print(num_samples)
+            num_samples = len(samples)
+            print(task, num_samples)
 
-        tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-        new_tokens = ["[TAB]", "[HEAD]", "[CELL]", "[ROW]", "scinotexp"]
-        tokenizer.add_tokens(new_tokens, special_tokens=True)
+            with Pool(processes=n_process) as pool:
+                num_samples_in_chunk = num_samples // n_process + 1
+                jobs = []
+                st = 0
+                for i in range(n_process):
+                    ed = st + num_samples_in_chunk
+                    ed = min(ed, num_samples)
+                    jobs.append([i, list(range(st, ed))])
+                    st = ed
 
-        converter = TableConverter(tokenizer)
+                results = pool.starmap(obtain_samples, jobs)
+            
+            task_samples = []
+            for samples in results:
+                task_samples.extend(samples)
+            print(len(task_samples))
+            
+            all_samples.extend(task_samples)
 
-        with Pool(processes=n_process) as pool:
-            num_samples_in_chunk = num_samples // n_process + 1
-            jobs = []
-            st = 0
-            for i in range(n_process):
-                ed = st + num_samples_in_chunk
-                ed = min(ed, num_samples)
-                jobs.append([i, list(range(st, ed))])
-                st = ed
-
-            results = pool.starmap(obtain_samples, jobs)
-
-        new_samples = []
-        for samples in results:
-            new_samples.extend(samples)
-
-        print(len(new_samples))
-
+        print(len(all_samples))
         if "test" in path:
             # if len(tab_tasks) > 1:
             #     random.shuffle(new_samples)
 
-            df = pd.DataFrame(new_samples)
+            df = pd.DataFrame(all_samples)
 
-            remain_keys = ['label', 'question', 'input', 'struct_in', 'graph']
+            remain_keys = ['label', 'question', 'input', 'graph']
             sub_df = df[remain_keys]
             sub_df.to_parquet(f'data/{output_dir}/test.pq', engine='pyarrow', index=False)
             sub_df.to_parquet(f'data/{output_dir}/val.pq', engine='pyarrow', index=False)
@@ -357,7 +389,7 @@ if __name__ == "__main__":
             df_to_jsonl(df_excluded, f"data/{output_dir}/ori_test.jsonl")
             df_to_jsonl(df_excluded, f"data/{output_dir}/ori_val.jsonl")
         else:
-            df = pd.DataFrame(new_samples)
+            df = pd.DataFrame(all_samples)
             df.to_parquet(f'data/{output_dir}/train.pq', engine='pyarrow', index=False)
 
         print("done")

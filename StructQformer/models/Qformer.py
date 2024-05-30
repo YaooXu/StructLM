@@ -754,7 +754,7 @@ class BertModel(BertPreTrainedModel):
                     seq_ids[None, None, :].repeat(batch_size, seq_length, 1)
                     <= seq_ids[None, :, None]
                 )
-                causal_mask = torch.ones_like(causal_mask)
+                # causal_mask = torch.ones_like(causal_mask)
 
                 # add a prefix ones mask to the causal mask
                 # causal and attention masks must have same type with pytorch version < 1.3

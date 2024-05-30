@@ -37,7 +37,7 @@ batch_size=2
 model_name=$(basename "$model_name_or_path")
 
         # --deepspeed=${deepspeed_config_file} \
-deepspeed --include localhost:0,1,2,3,4 --master_port=${master_port} StructQformer/train_sqformer.py \
+deepspeed --include localhost:1,2,3,4 --master_port=${master_port} StructQformer/train_sqformer.py \
         --model_name_or_path=${model_name_or_path} \
         --ckpt_path=${ckpt_path} \
         --finetuning_type=${finetuning_type} \

@@ -23,7 +23,7 @@ cross_attention_freq=1
 batch_size=1
 finetuning_type=freeze_backbone
 
-dataset_dir=data/WTQ_Inter_new
+dataset_dir=data/8Tab_tasks_ori_input_no_inter
 # dataset_dir=data/5Task_Mistral
 
 wandb online
@@ -36,16 +36,28 @@ wandb online
 model_name_or_path=TIGER-Lab/StructLM-7B-Mistral
 # model_name_or_path=codellama/CodeLlama-7b-Instruct-hf
 
-for finetuning_type in freeze_backbone lora ; do
-    for num_query_tokens in 10 ; do
-    
-        model_name=$(basename "$model_name_or_path")
+export CUDA_VISIBLE_DEVICES=1,2,3,4
 
-        deepspeed --include localhost:1,2,3,4 --master_port=${master_port} StructQformer/train_sqformer.py \
+for model_name_or_path in meta-llama/Llama-2-7b-hf ; do 
+
+    for finetuning_type in lora ; do
+    
+        for num_query_tokens in 10 ; do
+
+            strategy=v2.6
+
+            if [[ "$finetuning_type" == "freeze_backbone" && "$num_query_tokens" -eq 0 ]]; then
+                strategy="pt"
+                num_query_tokens=10
+            fi
+
+            model_name=$(basename "$model_name_or_path")
+                # --gradient_checkpointing \
+
+            deepspeed --master_port=${master_port} StructQformer/train_sqformer.py \
                 --model_name_or_path=${model_name_or_path} \
                 --do_train \
-                --skip_graph_encoder \
-                --gradient_checkpointing \
+                --load_best_model_at_end=False \
                 --finetuning_type=${finetuning_type} \
                 --overwrite_output_dir \
                 --deepspeed=${deepspeed_config_file} \
@@ -57,16 +69,14 @@ for finetuning_type in freeze_backbone lora ; do
                 --max_seq_length=${max_seq_length} \
                 --cross_attention_freq=${cross_attention_freq} \
                 --dataset_dir=${dataset_dir} \
-                --output_dir=/data/yaoxu/StructLM/outputs/${dataset_dir}/no_ge_ln_${model_name}_${finetuning_type}_${strategy}_${max_desc_length}_${max_seq_length}_${num_query_tokens}_${batch_size}_${num_train_epochs} \
+                --output_dir=/mnt/userdata/StructLM/outputs/${dataset_dir}/3e_bi_${model_name}_${finetuning_type}_${strategy}_${max_desc_length}_${max_seq_length}_${num_query_tokens}_${cross_attention_freq}_${wd}_${lr} \
                 --seed=0 \
                 --num_train_epochs=${num_train_epochs} \
-                --per_device_train_batch_size=${batch_size} \
-                --per_device_eval_batch_size=2 \
-                --gradient_accumulation_steps=1 \
-                --save_strategy=steps \
-                --evaluation_strategy=steps \
-                --eval_steps=${eval_steps} \
-                --save_steps=${eval_steps} \
+                --per_device_train_batch_size=2 \
+                --per_device_eval_batch_size=4 \
+                --gradient_accumulation_steps=2 \
+                --save_strategy=epoch \
+                --eval_steps=0.2 \
                 --save_total_limit=1 \
                 --learning_rate=${lr} \
                 --weight_decay=${wd} \
@@ -74,6 +84,6 @@ for finetuning_type in freeze_backbone lora ; do
                 --lr_scheduler_type=cosine \
                 --logging_steps=50 \
                 --report_to wandb
-                
         done
+    done
 done

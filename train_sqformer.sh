@@ -5,7 +5,6 @@
 # cd /mnt/publiccache/yaoxu/StructLM/
 
 export HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1
-export WANDB_PROJECT=WTQ
 
 # deepspeed_config_file=ds_zero2_offload.json
 deepspeed_config_file=ds_zero2.json
@@ -15,13 +14,13 @@ num_train_epochs=3
 lr=2e-5
 wd=0.05
 eval_steps=2000
-master_port=29504
+master_port=29508
 strategy=v2.6
 num_query_tokens=10
 cross_attention_freq=1
 finetuning_type=freeze_backbone
 
-dataset_dir=data/8Tab_Tasks
+dataset_dir=data/roberta/compwebq
 
 wandb online
 
@@ -30,15 +29,18 @@ wandb online
 
         # --skip_graph_encoder \
 
-model_name_or_path=TIGER-Lab/StructLM-7B-Mistral
+# meta-llama/Meta-Llama-3-8B
 # model_name_or_path=codellama/CodeLlama-7b-Instruct-hf
     # --gradient_checkpointing \
 
-for model_name_or_path in meta-llama/Llama-2-7b-hf ; do 
+model_name_or_path=meta-llama/Llama-2-7b-hf
+encoder_model_path=FacebookAI/roberta-base
 
-    for finetuning_type in lora ; do
+for dataset_dir in data/roberta/wikisql  data/roberta/tabfact ; do 
+
+    for finetuning_type in lora freeze_backbone ; do
     
-        for num_query_tokens in 10 ; do
+        for num_query_tokens in 10 0 ; do
 
             strategy=v2.6
 
@@ -48,10 +50,13 @@ for model_name_or_path in meta-llama/Llama-2-7b-hf ; do
             fi
 
             model_name=$(basename "$model_name_or_path")
+            encoder_name=$(basename "$encoder_model_path")
+            export WANDB_PROJECT=$(basename "$dataset_dir")
 
                 # --gradient_checkpointing \
             deepspeed --master_port=${master_port} StructQformer/train_sqformer.py \
                 --model_name_or_path=${model_name_or_path} \
+                --encoder_model_path=${encoder_model_path} \
                 --do_train \
                 --load_best_model_at_end=False \
                 --finetuning_type=${finetuning_type} \
@@ -65,7 +70,7 @@ for model_name_or_path in meta-llama/Llama-2-7b-hf ; do
                 --max_seq_length=${max_seq_length} \
                 --cross_attention_freq=${cross_attention_freq} \
                 --dataset_dir=${dataset_dir} \
-                --output_dir=/mnt/userdata/StructLM/outputs/${dataset_dir}/inter_${model_name}_${finetuning_type}_${strategy}_${max_desc_length}_${max_seq_length}_${num_query_tokens}_${cross_attention_freq}_${wd}_${lr} \
+                --output_dir=/mnt/userdata/StructLM/outputs/${dataset_dir}/${model_name}_${encoder_name}_${finetuning_type}_${strategy}_${max_desc_length}_${max_seq_length}_${num_query_tokens}_${cross_attention_freq}_${wd}_${lr} \
                 --seed=0 \
                 --num_train_epochs=${num_train_epochs} \
                 --per_device_train_batch_size=2 \

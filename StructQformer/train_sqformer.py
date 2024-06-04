@@ -220,7 +220,7 @@ if __name__ == "__main__":
             max_desc_length=data_args.max_desc_length,
             num_query_tokens=model_args.num_query_tokens,
         )
-        eval_dataset = eval_dataset.select(random.sample(range(len(eval_dataset)), k=4000))
+        eval_dataset = eval_dataset.select(random.sample(range(len(eval_dataset)), k=min(10000, len(eval_dataset))))
 
     if training_args.do_train or training_args.do_predict:
         test_dataset = build_instruction_dataset(

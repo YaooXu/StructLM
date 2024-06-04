@@ -14,13 +14,14 @@ from transformers import (
     AutoModel,
 )
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
+from StructQformer.models.base_models.modeling_roberta import RobertaEncoder, RobertaModel
 from StructQformer.models.graphormer.graphormer import Graphormer
 
 from models.hytrel import HyperGraphEncoder
 
 # from model.graph_encoder_geo import GraphEncoder
 
-from .Qformer import BertConfig, BertLMHeadModel
+from .Qformer import BertConfig, BertLMHeadModel, BertModel
 
 import torch.nn as nn
 
@@ -85,19 +86,25 @@ class StructQformer(nn.Module):
         self.encoder_model_path = args.encoder_model_path
         self.strategy = args.strategy
 
-        self.encoder_config = BertConfig.from_pretrained(self.encoder_model_path)
+        self.encoder_config = AutoConfig.from_pretrained(self.encoder_model_path)
         self.encoder_config.encoder_width = self.encoder_config.hidden_size
         # insert cross-attention layer every other block
         self.encoder_config.add_cross_attention = self.cross_attention_freq > 0
         self.encoder_config.cross_attention_freq = self.cross_attention_freq
         self.encoder_config.query_length = self.num_query_tokens
+        
         if self.strategy[:2] == "v2":
             # self.hypergraph_encoder = HyperGraphEncoder(hypergraph_enc_config)
             self.graph_encoder = Graphormer(args.encoder_model_path)
                 
-            self.model = BertLMHeadModel.from_pretrained(
-                self.encoder_model_path, config=self.encoder_config
+            # for roberta
+            self.encoder_config.add_cross_attention = True
+            self.encoder_config.is_decoder = True
+            self.encoder_config.use_dist_bias = False
+            self.model = RobertaModel.from_pretrained(
+                self.encoder_model_path, config=self.encoder_config,
             )
+            
             self.query_token_embeds = nn.Parameter(
                 torch.zeros(self.num_query_tokens, self.encoder_config.hidden_size)
             )
@@ -110,7 +117,7 @@ class StructQformer(nn.Module):
         self.projector1 = nn.Linear(4096, self.encoder_config.hidden_size)
         self.projector2 = nn.Linear(self.encoder_config.hidden_size, 4096)
 
-        self.ln_norm1 = nn.LayerNorm(768, self.encoder_config.layer_norm_eps)
+        self.ln_norm1 = nn.LayerNorm(self.encoder_config.hidden_size, self.encoder_config.layer_norm_eps)
         self.ln_norm2 = nn.LayerNorm(4096, self.encoder_config.layer_norm_eps)
 
         self.init_weight()
@@ -168,38 +175,14 @@ class StructQformer(nn.Module):
             query_embeds = self.projector1(query_embeds)
             query_embeds = self.ln_norm1(query_embeds)
             
-            # question_embeds = self.model.bert.embeddings(question_ids)
-            
-            # # add ln and dp
-            # query_embeds = self.model.bert.embeddings(input_embeds=self.query_token_embeds)
-            # query_embeds = query_embeds.unsqueeze(0).expand(batch_size, -1, -1)
-            # # print(query_embeds[0].norm(dim=-1).detach())
-            # # print(self.projector2.weight.data[0].detach())
-            
-            # input_embeds = torch.cat([question_embeds, query_embeds], dim=1)
-            # query_atts = torch.ones(query_embeds.shape[:-1]).to(self.device)
-            # attention_mask = torch.cat([graph["question_attention_mask"], query_atts], dim=1)
-
-            # print(input_embeds.norm(dim=-1).detach())
-            
-            # hidden_states = self.model.bert(
-            #     input_embeds=input_embeds,
-            #     attention_mask=attention_mask,
-            #     # encoder_hidden_states=graph_embeds,
-            #     # encoder_attention_mask=graph_attention_mask,
-            #     # query_length=self.num_query_tokens,
-            # ).last_hidden_state
-            # query_embeds = hidden_states[:, -self.num_query_tokens:, :]
-            # res_embeds = query_embeds
-            
             query_atts = torch.ones(query_embeds.shape[:-1]).to(self.device)
-            question_output = self.model.bert(
-                input_embeds=query_embeds,
+            question_output = self.model(
+                inputs_embeds=query_embeds,
                 attention_mask=query_atts,
                 encoder_hidden_states=graph_embeds,
                 encoder_attention_mask=graph_attention_mask,
-                query_length=self.num_query_tokens,
-                use_cache=False,
+                # query_length=self.num_query_tokens,
+                # use_cache=False,
             )
             res_embeds = question_output.last_hidden_state[:, -self.num_query_tokens:, :]
 
@@ -253,7 +236,7 @@ class StructQformerLLM(nn.Module):
 
         self.llm: LlamaForCausalLM = AutoModelForCausalLM.from_pretrained(
             args.model_name_or_path,
-            # use_flash_attention_2=True,
+            use_flash_attention_2=True,
             **kwargs
         )
         self.init_tokenizer_and_embeds(llm_tokenizer, bert_tokenizer, DEFAULT_GRAPH_PAD_TOKEN)
@@ -271,9 +254,9 @@ class StructQformerLLM(nn.Module):
                     task_type=TaskType.CAUSAL_LM,
                     inference_mode=False,
                     target_modules=args.target_modules.split(','),
-                    r=8,
-                    lora_alpha=16,
-                    lora_dropout=0.05
+                    r=32,
+                    lora_alpha=64,
+                    lora_dropout=0.1
                 )
                 self.llm = get_peft_model(self.llm, peft_config)
                 self.llm.print_trainable_parameters()

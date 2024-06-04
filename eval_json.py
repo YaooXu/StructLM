@@ -9,6 +9,11 @@ def eval_loose_json(args):
     evaluator = importlib.import_module("metrics.meta_tuning.evaluator").EvaluateTool(cfgargs)
     with open(args.json_file, "rb") as f:
         data = json.load(f)
+        
+    if '<|end_of_text|>' in data[0]['prediction']:
+        for item in data:
+            item['prediction'] = item['prediction'].split('<|end_of_text|>')[0].strip('"')
+  
     preds = [item['prediction'].split('<s>')[-1].split('\n\n')[0].strip() for item in data]
     labs = data
     summary = evaluator.evaluate(preds, labs, "test")
@@ -29,6 +34,11 @@ def main(args):
 
     with open(predictions_path, "rb") as f:
         data = json.load(f)
+        
+    if '<|end_of_text|>' in data[0]['prediction']:
+        for item in data:
+            item['prediction'] = item['prediction'].split('<|end_of_text|>')[0].strip('"')
+    
     preds = [item['prediction'].split('<s>')[-1].split('\n\n')[0].strip() for item in data]
     labs = data
     summary = evaluator.evaluate(preds, labs, "test")

@@ -32,6 +32,8 @@ import torch
 import torch.utils.checkpoint
 from torch import nn
 
+from ..base_models.modeling_roberta import RobertaModel
+
 
 class BertEmbeddings(nn.Module):
     """Construct the embeddings from word, position and token_type embeddings."""
@@ -420,6 +422,7 @@ class BertEncoder(nn.Module):
                     create_custom_forward(layer_module),
                     hidden_states,
                     attention_mask,
+                    dist_mat,
                     layer_head_mask,
                     encoder_hidden_states,
                     encoder_attention_mask,
@@ -607,9 +610,16 @@ class Graphormer(nn.Module):
     def __init__(self, model_path, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
-        self.model = BertModel.from_pretrained(model_path)
         self.config = AutoConfig.from_pretrained(model_path)
-
+        self.config.use_dist_bias = True
+        
+        if 'roberta' in model_path:
+            self.model = RobertaModel.from_pretrained(model_path, config=self.config)
+        else:
+            self.model = BertModel.from_pretrained(model_path, config=self.config)
+        
+        self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+        
         self.node_type_embedding = nn.Embedding(2, self.config.hidden_size)
         self.LayerNorm = nn.LayerNorm(self.config.hidden_size, eps=self.config.layer_norm_eps)
         self.dropout = nn.Dropout(self.config.hidden_dropout_prob)
@@ -627,7 +637,7 @@ class Graphormer(nn.Module):
                 (batch, seq_length, self.config.hidden_size), dtype=word_embeddings.weight.dtype
             ).to(self.model.device)
             for i in range(batch):
-                mask = (node_ids[i] != 0).int().unsqueeze(-1)
+                mask = (node_ids[i] != self.tokenizer.pad_token_id).int().unsqueeze(-1)
                 embeds = (word_embeddings(node_ids[i]) * mask).sum(dim=1)
                 assert (mask.sum(1) == 0).sum().item() == 0
                 embeds = embeds / mask.sum(1)

@@ -25,7 +25,7 @@ from torch_geometric.data.batch import Batch
 
 import torch.nn.functional as F
 import datasets
-from StructQformer.convert_table_to_graph_tabert import BipartiteData, TableConverter, _get_dist_mat
+from StructQformer.convert_table_to_graph_tabert import BipartiteData, StructDataConverter, _get_dist_mat
 from utils.utils import load_json
 
 logger = logging.getLogger(__name__)
@@ -105,7 +105,7 @@ def build_instruction_dataset(
 
     assert max_seq_length > max_desc_length
 
-    converter = TableConverter(bert_tokenizer)
+    converter = StructDataConverter(bert_tokenizer)
 
     def tokenization(examples):
         targets = []
@@ -251,13 +251,13 @@ class GraphDataset(Dataset):
             input, return_attention_mask=False, add_special_tokens=False
         )
 
-        target = f"{sample['label']}{self.llm_tokenizer.eos_token}"
+        target = f"{sample['label']}"
         tokenized_target = self.llm_tokenizer(
             target, return_attention_mask=False, add_special_tokens=False
         )
 
         question = sample['question']
-        question = ' '.join(question.split()[:64])
+        question = ' '.join(question.split()[:128])
         question = f'The query tokens for this "{question}" is {DEFAULT_GRAPH_PAD_TOKEN * self.num_query_tokens}'
         tokenized_question = self.llm_tokenizer(question, return_attention_mask=False, add_special_tokens=False)
 
@@ -269,13 +269,14 @@ class GraphDataset(Dataset):
 
         max_seq_length = self.max_seq_length
         s = [self.llm_tokenizer.bos_token_id] + s
+        t = t + [self.llm_tokenizer.eos_token_id]
+        q = [self.llm_tokenizer.bos_token_id] + q
         if self.training:
             input_ids = torch.LongTensor(s + t)[:max_seq_length]
             labels = torch.LongTensor([IGNORE_INDEX] * len(s) + t)[:max_seq_length]
         else:
             input_ids = torch.LongTensor(s)[:max_seq_length]
             labels = torch.LongTensor([IGNORE_INDEX] * len(s))[:max_seq_length]
-        q = [self.llm_tokenizer.bos_token_id] + q
         question_ids = torch.LongTensor(q)
 
         graph = sample['graph']
@@ -285,9 +286,9 @@ class GraphDataset(Dataset):
         num_nodes = min(num_nodes, 512)
         graph["node_types"] = torch.LongTensor(graph["node_types"])[:num_nodes]
         graph["graph_attention_mask"] = torch.LongTensor([1] * num_nodes)
-        # -1 -> 0
         graph["node_token_ids"] = torch.LongTensor(graph["node_token_ids"])[:num_nodes, :]
-        graph["dist_mat"] = torch.LongTensor(graph["dist_mat"])[:num_nodes, :num_nodes]
+        # -1 -> 0
+        graph["dist_mat"] = torch.LongTensor(graph["dist_mat"])[:num_nodes, :num_nodes] + 1
 
         item = {
             "input_ids": input_ids,

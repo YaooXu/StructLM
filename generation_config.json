@@ -4,5 +4,5 @@
     "eos_token_id": 2,
     "pad_token_id": 0,
     "max_length": 4096,
-    "max_new_tokens": 32
+    "max_new_tokens": 64
 }

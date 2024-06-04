@@ -91,7 +91,7 @@ def _get_dist_mat(num_nodes, edge_index):
     return dist_mat
 
 
-class TableConverter:
+class StructDataConverter:
     def __init__(self, tokenizer) -> None:
         self.tokenizer = tokenizer
         self.data_args = EasyDict(
@@ -130,7 +130,7 @@ class TableConverter:
 
         mask = [1 for _ in range(len(wordpieces))]
         while len(wordpieces) < self.data_args.max_token_length:
-            wordpieces.append("[PAD]")
+            wordpieces.append(self.tokenizer.pad_token)
             mask.append(0)
         return wordpieces, mask
 
@@ -146,9 +146,7 @@ class TableConverter:
 
         return cap, headers, cells
 
-    def _text2graph(self, table, get_dist_mat=True):
-
-
+    def _table2graph(self, table):
         try:
             if type(table) is str:
                 table = table.replace("col :", "<caption> [TAB] <header>")
@@ -179,14 +177,14 @@ class TableConverter:
             for head in header:
                 if not head:
                     wordpieces = ["[HEAD]"] + [
-                        "[PAD]" for _ in range(self.data_args.max_token_length - 1)
+                        self.tokenizer.pad_token for _ in range(self.data_args.max_token_length - 1)
                     ]
                     mask = [1] + [0 for _ in range(self.data_args.max_token_length - 1)]
                     wordpieces_all.append(wordpieces)
                     mask_all.append(mask)
                 else:
                     wordpieces, mask = self._tokenize_word(head)
-                    if wordpieces == ['[PAD]'] * self.data_args.max_token_length:
+                    if wordpieces == [self.tokenizer.pad_token] * self.data_args.max_token_length:
                         wordpieces[0] = '[HEAD]'
                     wordpieces_all.append(wordpieces)
                     mask_all.append(mask)
@@ -197,7 +195,7 @@ class TableConverter:
                 # ROW node
                 row_node_id = len(wordpieces_all)
                 wordpieces = ["[ROW]"] + \
-                    ["[PAD]" for _ in range(self.data_args.max_token_length - 1)]
+                    [self.tokenizer.pad_token for _ in range(self.data_args.max_token_length - 1)]
                 mask = [1] + [0 for _ in range(self.data_args.max_token_length - 1)]
                 wordpieces_all.append(wordpieces)
                 mask_all.append(mask)
@@ -209,7 +207,7 @@ class TableConverter:
                     word = word.strip() 
                     if word in ['-', '']:
                         wordpieces = ["[CELL]"] + [
-                            "[PAD]" for _ in range(self.data_args.max_token_length - 1)
+                            self.tokenizer.pad_token for _ in range(self.data_args.max_token_length - 1)
                         ]
                         mask = [1] + [0 for _ in range(self.data_args.max_token_length - 1)]
                     else:
@@ -217,7 +215,7 @@ class TableConverter:
                         wordpieces, mask = self._tokenize_word(word)
 
                     # some special unicode may lead to this, WTF
-                    if wordpieces == ['[PAD]'] * self.data_args.max_token_length:
+                    if wordpieces == [self.tokenizer.pad_token] * self.data_args.max_token_length:
                         wordpieces[0] = '[CELL]'
                     
                     node_id = len(wordpieces_all)
@@ -239,7 +237,7 @@ class TableConverter:
             dist_mat = _get_dist_mat(len(wordpieces_all), edge_index)
 
             # check all 0 input
-            xs_tem = torch.count_nonzero(node_token_ids, dim=1)
+            xs_tem = torch.count_nonzero(node_token_ids - self.tokenizer.pad_token_id, dim=1)
             assert torch.count_nonzero(xs_tem) == len(xs_tem)
 
             graph = {
@@ -253,10 +251,63 @@ class TableConverter:
         except Exception as e:
             print(e)
             print("Fail to parser the table...")
-            # cap, headers, data = self._text2table(table_str)
             return None
 
+    def _kg2graph(self, tuples):
+        wordpieces_all = []
+        name_to_id = {}
+        edge_index = []
+        node_types = []
+        
+        try:
+            for tup in tuples:
+                h, r, t = tup
+                if h not in name_to_id:
+                    name_to_id[h] = len(name_to_id)
+                    wordpieces_all.append(self._tokenize_word(h)[0])
+                    node_types.append(0)
 
+                name_to_id[r] = len(name_to_id)
+                wordpieces_all.append(self._tokenize_word(r)[0])
+                node_types.append(1)
+
+                if t not in name_to_id:
+                    name_to_id[t] = len(name_to_id)                
+                    wordpieces_all.append(self._tokenize_word(t)[0])
+                    node_types.append(0)
+
+                h_idx, r_idx, t_idx = name_to_id[h], name_to_id[r], name_to_id[t]
+
+                edge_index.append([h_idx, r_idx])
+                edge_index.append([r_idx, h_idx])
+
+                edge_index.append([r_idx, t_idx])
+                edge_index.append([t_idx, r_idx])
+
+            node_token_ids = torch.tensor(
+                    [self.tokenizer.convert_tokens_to_ids(x) for x in wordpieces_all], dtype=torch.long
+            )  
+            edge_index = np.array(edge_index).T
+            node_types = np.array(node_types)
+            dist_mat = _get_dist_mat(len(wordpieces_all), edge_index)       
+
+            # check all 0 input
+            xs_tem = torch.count_nonzero(node_token_ids - self.tokenizer.pad_token_id, dim=1)
+            assert torch.count_nonzero(xs_tem) == len(xs_tem)
+
+            graph = {
+                "edge_index": edge_index.tolist(),
+                'node_token_ids': node_token_ids.tolist(),
+                "node_types": node_types.tolist(),
+                "dist_mat": dist_mat.tolist()
+            }
+
+            return graph
+        except Exception as e:
+            print(e)
+            print("Fail to parser the kg...")
+            return None           
+        
 def obtain_samples(process_idx, idxes_to_process):
     new_samples = []
     tasks_to_n = defaultdict(int)
@@ -270,18 +321,21 @@ def obtain_samples(process_idx, idxes_to_process):
         sample = samples[idx]
 
         if "test" in path:
+            struct_data_key = 'table' if 'table' in sample else 'kg_tuples'
+
             question = sample['question'] if 'question' in sample else sample['statement']
-            table = sample["table"]
+            struct_data = sample[struct_data_key]
             sample['label'] = sample['seq_out']
             sample["input"] = sample["formatted_input"]
             # print(sample["formatted_input"])
         else:
             train_data = train_dataset[idx]
+            struct_data_key = 'table' if 'table' in train_data else 'kg_tuples'
 
             question = sample["input"].split('\n\n')[-1]
             assert question.lower().strip() == (train_data['question'] if 'question' in train_data else train_data['statement']).lower().strip()
             
-            table = train_data['table']
+            struct_data = train_data[struct_data_key]
             
             # table = re.findall(r"table:\n\n([\s\S]*)\n\n\n", sample["input"])[0]
             sys_prompt = 'Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.\n\n### Instruction:\n\n\n'
@@ -290,7 +344,11 @@ def obtain_samples(process_idx, idxes_to_process):
 
         sample["question"] = question
 
-        graph = converter._text2graph(table, True)
+        if struct_data_key == 'table':
+            graph = converter._table2graph(struct_data)
+        elif struct_data_key == 'kg_tuples':
+            graph = converter._kg2graph(struct_data)
+            
         if graph:
             sample['graph'] = graph
             # sample["struct_in"] = table
@@ -308,8 +366,9 @@ def obtain_samples(process_idx, idxes_to_process):
 
 if __name__ == "__main__":
 
-    output_dir = '8Tab_tasks_ori_input_no_inter'
-    os.makedirs(f'data/{output_dir}', exist_ok=True)
+    output_dir = 'tabfact'
+    output_dir = f'data/bert/{output_dir}'
+    os.makedirs(output_dir, exist_ok=True)
     n_process = 40
 
     # path = "data/processed/skginstruct_skgonly.json"
@@ -317,19 +376,22 @@ if __name__ == "__main__":
     # tab_tasks = ['wikitq']
 
     # path = "data/processed/skginstruct_test_file_mistral.json"
-    # tab_tasks = ['task: tabfact', 'task: wiki table question', 'task: wikisql']
+    # tab_tasks = ['task: tabfact', 'task: wiki table question', 'task: wikisql', 'task: hybridqa', 'task: compwebq']
     # tab_tasks = ['task: wiki table question']
 
-    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    # tokenizer = AutoTokenizer.from_pretrained("FacebookAI/roberta-base")
+    tokenizer = AutoTokenizer.from_pretrained("google-bert/bert-base-uncased")
     new_tokens = ["[TAB]", "[HEAD]", "[CELL]", "[ROW]", "scinotexp"]
     tokenizer.add_tokens(new_tokens, special_tokens=True)
 
-    converter = TableConverter(tokenizer)
+    converter = StructDataConverter(tokenizer)
 
     # for path, tab_tasks in zip(["data/processed/skginstruct_skgonly.json", "data/processed/skginstruct_test_file_mistral.json"],
     #                            [['fetaqa', 'hybridqa', 'wikitq', 'tabmwp', 'wikisql', 'tab_fact', 'feverous'], ['task: wiki table question']]):
-    for path, tab_tasks in zip(["data/processed/skginstruct_test_file_mistral.json"],
-                                [['task: wiki table question', 'task: wikisql', 'task: tabfact']]):
+    for path, tab_tasks in zip(["data/processed/skginstruct_skgonly.json", "data/processed/skginstruct_test_file_mistral.json"],
+                               [['tab_fact'], ['task: tabfact']]):
+    # for path, tab_tasks in zip(["data/processed/skginstruct_test_file_mistral.json"],
+    #                             [['kvret']]):
         all_samples = load_json(path=path)
 
         tasks_to_samples = defaultdict(list)
@@ -382,14 +444,14 @@ if __name__ == "__main__":
 
             remain_keys = ['label', 'question', 'input', 'graph']
             sub_df = df[remain_keys]
-            sub_df.to_parquet(f'data/{output_dir}/test.pq', engine='pyarrow', index=False)
-            sub_df.to_parquet(f'data/{output_dir}/val.pq', engine='pyarrow', index=False)
+            sub_df.to_parquet(f'{output_dir}/test.pq', engine='pyarrow', index=False)
+            sub_df.to_parquet(f'{output_dir}/val.pq', engine='pyarrow', index=False)
 
             df_excluded = df.drop(columns=remain_keys)
-            df_to_jsonl(df_excluded, f"data/{output_dir}/ori_test.jsonl")
-            df_to_jsonl(df_excluded, f"data/{output_dir}/ori_val.jsonl")
+            df_to_jsonl(df_excluded, f"{output_dir}/ori_test.jsonl")
+            df_to_jsonl(df_excluded, f"{output_dir}/ori_val.jsonl")
         else:
             df = pd.DataFrame(all_samples)
-            df.to_parquet(f'data/{output_dir}/train.pq', engine='pyarrow', index=False)
+            df.to_parquet(f'{output_dir}/train.pq', engine='pyarrow', index=False)
 
         print("done")

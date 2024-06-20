@@ -52,9 +52,9 @@ class QueryEmbedsGenerator(nn.Module):
         graph_pad_ed_idx = graph_pad_st_idx + self.num_query_tokens
 
         query_token_embeds = self.query_token_embeds
-        query_token_embeds = self.ln_norm(query_token_embeds)
+        # query_token_embeds = self.ln_norm(query_token_embeds)
 
-        new_inputs_embeds = torch.zeros_like(inputs_embeds).to(inputs_embeds.device)
+        new_inputs_embeds = torch.zeros_like(inputs_embeds, dtype=inputs_embeds.dtype, device=inputs_embeds.device)
         for i in range(batch_size):
             cur_inputs_embeds = inputs_embeds[i]
             cur_graph_pad_st_idx, cur_graph_pad_ed_idx = graph_pad_st_idx[i], graph_pad_ed_idx[i]
@@ -68,7 +68,7 @@ class QueryEmbedsGenerator(nn.Module):
         last_hidden_state = output.hidden_states[-1]
 
         query_embeds = torch.zeros(
-            (batch_size, self.num_query_tokens, self.llm_hidden_size)).to(inputs_embeds.device)
+            (batch_size, self.num_query_tokens, self.llm_hidden_size), dtype=inputs_embeds.dtype, device=inputs_embeds.device)
         for i in range(batch_size):
             query_embeds[i] += last_hidden_state[i][graph_pad_st_idx[i]: graph_pad_ed_idx[i]]
 
@@ -104,6 +104,7 @@ class StructQformer(nn.Module):
             self.model = RobertaModel.from_pretrained(
                 self.encoder_model_path, config=self.encoder_config,
             )
+            # self.model = self.graph_encoder.model
             
             self.query_token_embeds = nn.Parameter(
                 torch.zeros(self.num_query_tokens, self.encoder_config.hidden_size)
@@ -166,28 +167,30 @@ class StructQformer(nn.Module):
         if self.args.skip_graph_encoder:
             res_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
         else:
-            graph_embeds = self.graph_encoder(graph['graph'])
+            graph_output = self.graph_encoder(graph['graph'])
             graph_attention_mask = graph['graph']["graph_attention_mask"]
 
-            # from bf16 to fp32
-            query_embeds = self.query_embeds_generator(
-                graph, llm, llm_graph_pad_token_id).to(graph_embeds.dtype)
+            query_embeds = self.query_embeds_generator(graph, llm, llm_graph_pad_token_id)
+
             query_embeds = self.projector1(query_embeds)
-            query_embeds = self.ln_norm1(query_embeds)
+            # query_embeds = self.ln_norm1(query_embeds)
             
             query_atts = torch.ones(query_embeds.shape[:-1]).to(self.device)
+            
             question_output = self.model(
                 inputs_embeds=query_embeds,
                 attention_mask=query_atts,
-                encoder_hidden_states=graph_embeds,
+                encoder_hidden_states=graph_output.last_hidden_state,
                 encoder_attention_mask=graph_attention_mask,
                 # query_length=self.num_query_tokens,
                 # use_cache=False,
             )
             res_embeds = question_output.last_hidden_state[:, -self.num_query_tokens:, :]
 
+        # print(res_embeds.norm(dim=-1))
         res_embeds = self.projector2(res_embeds)
-        res_embeds = self.ln_norm2(res_embeds)
+        # res_embeds = self.ln_norm2(res_embeds)
+        # print(res_embeds.norm(dim=-1))
         
         return res_embeds
 
@@ -230,13 +233,14 @@ class StructQformerLLM(nn.Module):
             if args.ckpt_path is not None and not args.skip_graph_encoder:
                 logger.info(f"loading qformer ckpt from {args.ckpt_path}")
                 self.qformer.load_state_dict(torch.load(os.path.join(args.ckpt_path, "Qformer.bin")))
-
+            
+            self.qformer = self.qformer.to(kwargs['torch_dtype'])
         else:
             self.qformer = None
 
         self.llm: LlamaForCausalLM = AutoModelForCausalLM.from_pretrained(
             args.model_name_or_path,
-            use_flash_attention_2=True,
+            attn_implementation=args.attn_implementation,
             **kwargs
         )
         self.init_tokenizer_and_embeds(llm_tokenizer, bert_tokenizer, DEFAULT_GRAPH_PAD_TOKEN)
@@ -256,7 +260,7 @@ class StructQformerLLM(nn.Module):
                     target_modules=args.target_modules.split(','),
                     r=32,
                     lora_alpha=64,
-                    lora_dropout=0.1
+                    lora_dropout=0.1,
                 )
                 self.llm = get_peft_model(self.llm, peft_config)
                 self.llm.print_trainable_parameters()
@@ -308,7 +312,7 @@ class StructQformerLLM(nn.Module):
 
             all_param += num_params
             if param.requires_grad:
-                print(name, param.shape, num_params)
+                # print(name, param.shape, num_params)
                 trainable_params += num_params
 
         print(f"{trainable_params} / {all_param}, {trainable_params*100/all_param}%")
@@ -325,7 +329,7 @@ class StructQformerLLM(nn.Module):
             graph_pad_st_idx = torch.argmax((input_ids == self.llm_graph_pad_token_id).int(), dim=1)
             graph_pad_ed_idx = graph_pad_st_idx + self.num_query_tokens
 
-            new_inputs_embeds = torch.zeros_like(inputs_embeds).to(inputs_embeds.device)
+            new_inputs_embeds = torch.zeros_like(inputs_embeds, dtype=inputs_embeds.dtype, device=inputs_embeds.device)
             for i in range(batch_size):
                 cur_inputs_embeds = inputs_embeds[i]
                 cur_graph_pad_st_idx, cur_graph_pad_ed_idx = graph_pad_st_idx[i], graph_pad_ed_idx[i]

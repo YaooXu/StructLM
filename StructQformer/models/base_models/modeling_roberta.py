@@ -217,15 +217,17 @@ class RobertaSelfAttention(nn.Module):
         query_layer = self.transpose_for_scores(mixed_query_layer)
 
         use_cache = past_key_value is not None
-        if self.is_decoder:
-            # if cross_attention save Tuple(torch.Tensor, torch.Tensor) of all cross attention key/value_states.
-            # Further calls to cross_attention layer can then reuse all cross-attention
-            # key/value_states (first "if" case)
-            # if uni-directional self-attention (decoder) save Tuple(torch.Tensor, torch.Tensor) of
-            # all previous decoder key/value_states. Further calls to uni-directional self-attention
-            # can concat previous decoder key/value_states to current projected key/value_states (third "elif" case)
-            # if encoder bi-directional self-attention `past_key_value` is always `None`
-            past_key_value = (key_layer, value_layer)
+        # if self.is_decoder:
+        #     # if cross_attention save Tuple(torch.Tensor, torch.Tensor) of all cross attention key/value_states.
+        #     # Further calls to cross_attention layer can then reuse all cross-attention
+        #     # key/value_states (first "if" case)
+        #     # if uni-directional self-attention (decoder) save Tuple(torch.Tensor, torch.Tensor) of
+        #     # all previous decoder key/value_states. Further calls to uni-directional self-attention
+        #     # can concat previous decoder key/value_states to current projected key/value_states (third "elif" case)
+        #     # if encoder bi-directional self-attention `past_key_value` is always `None`
+        #     past_key_value = (key_layer, value_layer)
+        # changed
+        past_key_value = (key_layer, value_layer)
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
         attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
@@ -257,8 +259,7 @@ class RobertaSelfAttention(nn.Module):
             # Apply the attention mask is (precomputed for all layers in RobertaModel forward() function)
             attention_scores = attention_scores + attention_mask
 
-        if self.use_dist_bias:
-            assert dist_mat is not None
+        if dist_mat is not None:
             # [b, len, len, n_head] -> [b, n_head, len, len]
             dist_bias = self.dist_bias(dist_mat).permute(0, 3, 1, 2)
             attention_scores += dist_bias
@@ -282,8 +283,10 @@ class RobertaSelfAttention(nn.Module):
 
         outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
 
-        if self.is_decoder:
-            outputs = outputs + (past_key_value,)
+        # if self.is_decoder:
+        #     outputs = outputs + (past_key_value,)
+        # changed
+        outputs = outputs + (past_key_value,)
         return outputs
 
 
@@ -424,12 +427,15 @@ class RobertaLayer(nn.Module):
         )
         attention_output = self_attention_outputs[0]
 
-        # if decoder, the last output is tuple of self-attn cache
-        if self.is_decoder:
-            outputs = self_attention_outputs[1:-1]
-            present_key_value = self_attention_outputs[-1]
-        else:
-            outputs = self_attention_outputs[1:]  # add self attentions if we output attention weights
+        # # if decoder, the last output is tuple of self-attn cache
+        # if self.is_decoder:
+        #     outputs = self_attention_outputs[1:-1]
+        #     present_key_value = self_attention_outputs[-1]
+        # else:
+        #     outputs = self_attention_outputs[1:]  # add self attentions if we output attention weights
+        # changed
+        outputs = self_attention_outputs[1:-1]
+        present_key_value = self_attention_outputs[-1]
 
         cross_attn_present_key_value = None
         if self.is_decoder and encoder_hidden_states is not None:
@@ -463,10 +469,12 @@ class RobertaLayer(nn.Module):
         )
         outputs = (layer_output,) + outputs
 
-        # if decoder, return the attn key/values as the last output
-        if self.is_decoder:
-            outputs = outputs + (present_key_value,)
-
+        # # if decoder, return the attn key/values as the last output
+        # if self.is_decoder:
+        #     outputs = outputs + (present_key_value,)
+        # changed
+        outputs = outputs + (present_key_value,)
+        
         return outputs
 
     def feed_forward_chunk(self, attention_output):
@@ -732,8 +740,6 @@ class RobertaModel(RobertaPreTrainedModel):
             self.encoder.layer[layer].attention.prune_heads(heads)
 
     # added
-    
-    # added
     def get_extended_attention_mask(
         self, attention_mask: Tensor, input_shape: Tuple[int], device: torch.device = None, dtype: torch.float = None
     ) -> Tensor:
@@ -849,10 +855,12 @@ class RobertaModel(RobertaPreTrainedModel):
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        if self.config.is_decoder:
-            use_cache = use_cache if use_cache is not None else self.config.use_cache
-        else:
-            use_cache = False
+        # if self.config.is_decoder:
+        #     use_cache = use_cache if use_cache is not None else self.config.use_cache
+        # else:
+        #     use_cache = False
+        # changed
+        use_cache = use_cache if use_cache is not None else self.config.use_cache
 
         if input_ids is not None and inputs_embeds is not None:
             raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")

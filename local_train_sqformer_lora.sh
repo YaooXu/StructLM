@@ -37,7 +37,7 @@ model_name_or_path=TIGER-Lab/StructLM-7B-Mistral
 
 encoder_model_path=FacebookAI/roberta-base
 
-export CUDA_VISIBLE_DEVICES=0,1,2,3
+# export CUDA_VISIBLE_DEVICES=1,2,3,4
 
 for model_name_or_path in meta-llama/Llama-2-7b-hf ; do 
 
@@ -55,7 +55,7 @@ for model_name_or_path in meta-llama/Llama-2-7b-hf ; do
             model_name=$(basename "$model_name_or_path")
             encoder_name=$(basename "$encoder_model_path")
 
-            deepspeed --master_port=${master_port} StructQformer/train_sqformer.py \
+            deepspeed --include localhost:1,2,3,4  --master_port=${master_port} StructQformer/train_sqformer.py \
                 --model_name_or_path=${model_name_or_path} \
                 --encoder_model_path=${encoder_model_path} \
                 --gradient_checkpointing \
@@ -72,12 +72,12 @@ for model_name_or_path in meta-llama/Llama-2-7b-hf ; do
                 --max_seq_length=${max_seq_length} \
                 --cross_attention_freq=${cross_attention_freq} \
                 --dataset_dir=${dataset_dir} \
-                --output_dir=/mnt/userdata/StructLM/outputs/${dataset_dir}/${model_name}_${encoder_name}_${finetuning_type}_${strategy}_${max_desc_length}_${max_seq_length}_${num_query_tokens}_${cross_attention_freq}_${wd}_${lr} \
+                --output_dir=/data/yaoxu/StructLM/outputs/${dataset_dir}/r8_${model_name}_${encoder_name}_${finetuning_type}_${strategy}_${max_desc_length}_${max_seq_length}_${num_query_tokens}_${cross_attention_freq}_${wd}_${lr} \
                 --seed=0 \
                 --num_train_epochs=${num_train_epochs} \
-                --per_device_train_batch_size=2 \
-                --per_device_eval_batch_size=4 \
-                --gradient_accumulation_steps=2 \
+                --per_device_train_batch_size=1 \
+                --per_device_eval_batch_size=2 \
+                --gradient_accumulation_steps=1 \
                 --save_strategy=epoch \
                 --evaluation_strategy=steps \
                 --eval_steps=0.2 \

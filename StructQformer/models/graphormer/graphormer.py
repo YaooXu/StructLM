@@ -652,7 +652,7 @@ class Graphormer(nn.Module):
             inputs_embeds=node_embeds,
             attention_mask=graph_attention_mask,
             dist_mat=graphs["dist_mat"],
-            use_cache=False,
+            use_cache=True,
         )
 
-        return output.last_hidden_state
+        return output

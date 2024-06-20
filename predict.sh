@@ -19,17 +19,18 @@ wd=0.05
 eval_steps=1000
 master_port=29500
 strategy=v2.6
-num_query_tokens=10
 cross_attention_freq=1
-finetuning_type=lora
+num_query_tokens=0
+finetuning_type=freeze_backbone
 
-dataset_dir=data/WTQ_ori_input
+dataset_dir=data/roberta/wikitq
 
 wandb offline
 
-ckpt_path=/mnt/userdata/StructLM/outputs/data/roberta/compwebq/Llama-2-7b-hf_roberta-base_lora_v2.6_2048_2560_10_1_0.05_2e-5/checkpoint-10341
+ckpt_path=/mnt/userdata/StructLM/outputs/data/roberta/wikitq/5e_no_ln_cross_attn_Llama-2-7b-hf_roberta-base_lora_v2.6_2048_2560_10_1_0.05_2e-5/checkpoint-7075
 
 model_name_or_path=meta-llama/Llama-2-7b-hf
+model_name_or_path=TIGER-Lab/StructLM-7B-Mistral
 # model_name_or_path=codellama/CodeLlama-7b-Instruct-hf
         # --gradient_checkpointing \
 
@@ -38,10 +39,10 @@ encoder_model_path=FacebookAI/roberta-base
 model_name=$(basename "$model_name_or_path")
 
         # --deepspeed=${deepspeed_config_file} \
+        # --ckpt_path=${ckpt_path} \
 deepspeed --include localhost:0,1,2,3 --master_port=${master_port} StructQformer/train_sqformer.py \
         --model_name_or_path=${model_name_or_path} \
         --encoder_model_path=${encoder_model_path} \
-        --ckpt_path=${ckpt_path} \
         --finetuning_type=${finetuning_type} \
         --do_predict \
         --do_eval \
@@ -52,11 +53,11 @@ deepspeed --include localhost:0,1,2,3 --master_port=${master_port} StructQformer
         --max_seq_length=${max_seq_length} \
         --cross_attention_freq=${cross_attention_freq} \
         --dataset_dir=${dataset_dir} \
-        --output_dir=./tmp_pred/ \
+        --output_dir=tmp_pred/structlm_mistral \
         --seed=0 \
         --num_train_epochs=${num_train_epochs} \
         --per_device_train_batch_size=1 \
-        --per_device_eval_batch_size=2 \
+        --per_device_eval_batch_size=1 \
         --gradient_accumulation_steps=1 \
         --save_strategy=steps \
         --evaluation_strategy=steps \

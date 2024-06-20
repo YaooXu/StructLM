@@ -61,7 +61,8 @@ class ModelArguments:
 
     ckpt_path: str = field(default=None)
 
-
+    attn_implementation: str = field(default='flash_attention_2')
+    
 @dataclass
 class DataArguments:
     dataset_dir: str = field(default="dataset/webqsp/processed_files")
@@ -234,10 +235,7 @@ if __name__ == "__main__":
         )
         test_examples = load_jsonl(dataset_dir / f"ori_test.jsonl")
 
-        # for debug
-        # idxes = random.sample(range(len(test_examples)), k=1000)
-        # test_dataset = test_dataset.select(idxes)
-        # test_examples = [test_examples[i] for i in idxes]
+        test_dataset = test_dataset.select(range(1000))
 
     data_collator = DataCollatorForGraphSupervisedDataset(llm_tokenizer)
 

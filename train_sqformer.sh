@@ -10,17 +10,17 @@ export HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 deepspeed_config_file=ds_zero2.json
 max_desc_length=2048
 max_seq_length=2560
-num_train_epochs=3
+num_train_epochs=5
 lr=2e-5
 wd=0.05
 eval_steps=2000
-master_port=29508
+master_port=29505
 strategy=v2.6
 num_query_tokens=10
 cross_attention_freq=1
 finetuning_type=freeze_backbone
 
-dataset_dir=data/roberta/compwebq
+dataset_dir=data_g_retrieve/roberta/WTQ
 
 wandb online
 
@@ -36,9 +36,9 @@ wandb online
 model_name_or_path=meta-llama/Llama-2-7b-hf
 encoder_model_path=FacebookAI/roberta-base
 
-for dataset_dir in data/roberta/wikisql  data/roberta/tabfact ; do 
+for model_name_or_path in meta-llama/Llama-2-7b-hf ; do 
 
-    for finetuning_type in lora freeze_backbone ; do
+    for finetuning_type in lora ; do
     
         for num_query_tokens in 10 0 ; do
 
@@ -70,12 +70,12 @@ for dataset_dir in data/roberta/wikisql  data/roberta/tabfact ; do
                 --max_seq_length=${max_seq_length} \
                 --cross_attention_freq=${cross_attention_freq} \
                 --dataset_dir=${dataset_dir} \
-                --output_dir=/mnt/userdata/StructLM/outputs/${dataset_dir}/${model_name}_${encoder_name}_${finetuning_type}_${strategy}_${max_desc_length}_${max_seq_length}_${num_query_tokens}_${cross_attention_freq}_${wd}_${lr} \
+                --output_dir=/mnt/userdata/StructLM/outputs/${dataset_dir}/g_5e_no_ln_r32_${model_name}_${encoder_name}_${finetuning_type}_${strategy}_${max_desc_length}_${max_seq_length}_${num_query_tokens}_${cross_attention_freq}_${wd}_${lr} \
                 --seed=0 \
                 --num_train_epochs=${num_train_epochs} \
                 --per_device_train_batch_size=2 \
                 --per_device_eval_batch_size=4 \
-                --gradient_accumulation_steps=2 \
+                --gradient_accumulation_steps=1 \
                 --save_strategy=epoch \
                 --evaluation_strategy=steps \
                 --eval_steps=0.2 \

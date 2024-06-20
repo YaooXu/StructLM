@@ -328,6 +328,27 @@ def obtain_samples(process_idx, idxes_to_process):
             sample['label'] = sample['seq_out']
             sample["input"] = sample["formatted_input"]
             # print(sample["formatted_input"])
+            
+            if shuffle:
+                df = pd.DataFrame(sample['table']['rows'], columns=sample['table']['header'])
+                # shuffle rows
+                df_shuffled = df.sample(frac=1).reset_index(drop=True)
+                
+                # shuffle cols
+                df_shuffled = df_shuffled.iloc[:, :].sample(frac=1, axis=1)
+                new_rows = ["col : " + " | ".join(df_shuffled.columns)]
+
+                for idx, row in df_shuffled.iterrows():
+                    row_str = "row {} : ".format(idx + 1) + " | ".join(map(str, row.values))
+                    new_rows.append(row_str)
+                new_struct_in = " ".join(new_rows).lower()
+                new_formatted_input = sample['formatted_input'].replace(sample['struct_in'], new_struct_in)
+
+                if len(new_struct_in) != len(sample['struct_in']):
+                    continue
+                
+                sample['input'] = new_formatted_input
+                            
         else:
             train_data = train_dataset[idx]
             struct_data_key = 'table' if 'table' in train_data else 'kg_tuples'
@@ -366,10 +387,11 @@ def obtain_samples(process_idx, idxes_to_process):
 
 if __name__ == "__main__":
 
-    output_dir = 'tabfact'
-    output_dir = f'data/bert/{output_dir}'
+    output_dir = 'WTQ'
+    output_dir = f'data_structlm_mistral/roberta/{output_dir}'
     os.makedirs(output_dir, exist_ok=True)
-    n_process = 40
+    n_process = 32
+    shuffle = False
 
     # path = "data/processed/skginstruct_skgonly.json"
     # tab_tasks = ['fetaqa', 'hybridqa', 'wikitq', 'tabmwp', 'mmqa', 'wikisql', 'tab_fact', 'feverous']
@@ -379,8 +401,8 @@ if __name__ == "__main__":
     # tab_tasks = ['task: tabfact', 'task: wiki table question', 'task: wikisql', 'task: hybridqa', 'task: compwebq']
     # tab_tasks = ['task: wiki table question']
 
-    # tokenizer = AutoTokenizer.from_pretrained("FacebookAI/roberta-base")
-    tokenizer = AutoTokenizer.from_pretrained("google-bert/bert-base-uncased")
+    tokenizer = AutoTokenizer.from_pretrained("FacebookAI/roberta-base")
+    # tokenizer = AutoTokenizer.from_pretrained("google-bert/bert-base-uncased")
     new_tokens = ["[TAB]", "[HEAD]", "[CELL]", "[ROW]", "scinotexp"]
     tokenizer.add_tokens(new_tokens, special_tokens=True)
 
@@ -388,10 +410,11 @@ if __name__ == "__main__":
 
     # for path, tab_tasks in zip(["data/processed/skginstruct_skgonly.json", "data/processed/skginstruct_test_file_mistral.json"],
     #                            [['fetaqa', 'hybridqa', 'wikitq', 'tabmwp', 'wikisql', 'tab_fact', 'feverous'], ['task: wiki table question']]):
-    for path, tab_tasks in zip(["data/processed/skginstruct_skgonly.json", "data/processed/skginstruct_test_file_mistral.json"],
-                               [['tab_fact'], ['task: tabfact']]):
-    # for path, tab_tasks in zip(["data/processed/skginstruct_test_file_mistral.json"],
-    #                             [['kvret']]):
+    # for path, tab_tasks in zip(["data/processed/skginstruct_skgonly.json", "data/processed/skginstruct_test_file_mistral.json"],
+    #                            [['fetaqa', 'hybridqa', 'wikitq', 'tabmwp', 'mmqa', 'wikisql', 'tab_fact', 'feverous', 'compwebq'], 
+    #                             ['task: tabfact', 'task: wiki table question', 'task: wikisql', 'task: compwebq']]):
+    for path, tab_tasks in zip(["data/processed/skginstruct_test_file_mistral.json"],
+                                [['task: wiki table question']]):
         all_samples = load_json(path=path)
 
         tasks_to_samples = defaultdict(list)

@@ -10,7 +10,7 @@ export HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 deepspeed_config_file=ds_zero2.json
 max_desc_length=2048
 max_seq_length=2560
-num_train_epochs=10
+num_train_epochs=5
 lr=2e-5
 wd=0.05
 eval_steps=2000
@@ -28,7 +28,7 @@ wandb online
 # qformer_ckpt_path=StructLM_cwq_webqsp/v2.5_1792_2048_10_1_0.05_1e-5/checkpoint-10000/Qformer.bin
         # --qformer_ckpt_path=${qformer_ckpt_path} \
 
-        # --skip_graph_encoder \
+        
 
 # meta-llama/Meta-Llama-3-8B
 # model_name_or_path=codellama/CodeLlama-7b-Instruct-hf
@@ -37,11 +37,11 @@ wandb online
 model_name_or_path=meta-llama/Llama-2-7b-hf
 encoder_model_path=FacebookAI/roberta-base
 
-for model_name_or_path in meta-llama/Llama-2-7b-hf codellama/CodeLlama-7b-Instruct-hf ; do 
+for model_name_or_path in meta-llama/Llama-2-7b-hf ; do 
 
-    for finetuning_type in full ; do
+    for finetuning_type in lora ; do
     
-        for num_query_tokens in 10 ; do
+        for encoder_model_path in FacebookAI/roberta-base FacebookAI/roberta-large ; do
 
             strategy=v2.6
 
@@ -59,6 +59,7 @@ for model_name_or_path in meta-llama/Llama-2-7b-hf codellama/CodeLlama-7b-Instru
                 --model_name_or_path=${model_name_or_path} \
                 --encoder_model_path=${encoder_model_path} \
                 --do_train \
+                --skip_graph_encoder \
                 --load_best_model_at_end=False \
                 --finetuning_type=${finetuning_type} \
                 --overwrite_output_dir \
@@ -71,12 +72,12 @@ for model_name_or_path in meta-llama/Llama-2-7b-hf codellama/CodeLlama-7b-Instru
                 --max_seq_length=${max_seq_length} \
                 --cross_attention_freq=${cross_attention_freq} \
                 --dataset_dir=${dataset_dir} \
-                --output_dir=/mnt/userdata/StructLM/outputs/${dataset_dir}/5e_28_no_inter_${model_name}_${encoder_name}_${finetuning_type}_${strategy}_${max_desc_length}_${max_seq_length}_${num_query_tokens}_${cross_attention_freq}_${wd}_${lr} \
+                --output_dir=/mnt/userdata/StructLM/outputs/${dataset_dir}/5e_41_no_inter_skip_${model_name}_${encoder_name}_${finetuning_type}_${strategy}_${max_desc_length}_${max_seq_length}_${num_query_tokens}_${cross_attention_freq}_${wd}_${lr} \
                 --seed=0 \
                 --num_train_epochs=${num_train_epochs} \
-                --per_device_train_batch_size=2 \
+                --per_device_train_batch_size=4 \
                 --per_device_eval_batch_size=4 \
-                --gradient_accumulation_steps=8 \
+                --gradient_accumulation_steps=1 \
                 --save_strategy=epoch \
                 --evaluation_strategy=steps \
                 --eval_steps=0.2 \

@@ -122,10 +122,9 @@ def post_process_function(
 
     logger.info(f'update examples')
     for i in range(len(predictions)):
-        # predictions[i] = {**examples[i], **predictions[i]}
-        examples[i].update(predictions[i])
+        predictions[i].update(**examples[i])
 
-    return examples
+    return predictions
 
 
 class StructQASeq2SeqTrainer(Seq2SeqTrainer):
@@ -240,9 +239,11 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
             with open(os.path.join(cur_output_dir, "predictions.json"), "w") as f:
                 json.dump(predictions, f)
 
-            eval_loose_json(easydict.EasyDict(
+            summary = eval_loose_json(easydict.EasyDict(
                 {'json_file': os.path.join(cur_output_dir, "predictions.json")}
             ))
+            self.log(summary)
+            
         return output
 
     def prediction_step(

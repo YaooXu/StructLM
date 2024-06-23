@@ -1,15 +1,20 @@
 {
     "bf16": {
-        "enabled": "auto"
+        "enabled": "auto",
+        "loss_scale": 0,
+        "loss_scale_window": 1000,
+        "initial_scale_power": 16,
+        "hysteresis": 2,
+        "min_loss_scale": 1
     },
 
     "zero_optimization": {
         "stage": 2,
         "allgather_partitions": true,
-        "allgather_bucket_size": 1e8,
+        "allgather_bucket_size": 2e8,
         "overlap_comm": true,
         "reduce_scatter": true,
-        "reduce_bucket_size": 1e8,
+        "reduce_bucket_size": 2e8,
         "contiguous_gradients": true
     },
 

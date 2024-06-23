@@ -22,6 +22,7 @@ def eval_loose_json(args):
     output_path = args.json_file.replace('.json', '_summary.json')
     with open(output_path, "w") as f:
         json.dump(summary, f, indent=4)
+    return summary
 
 def main(args):
     # use import lib to import EvaluateTool from metrics.{args.dataset_name}.evaluator

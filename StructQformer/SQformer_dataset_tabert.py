@@ -230,7 +230,7 @@ def build_instruction_dataset(
 
 
 class GraphDataset(Dataset):
-    def __init__(self, data_path, llm_tokenizer, bert_tokenizer, num_query_tokens=10, max_seq_length=2560, training=True) -> None:
+    def __init__(self, data_path, llm_tokenizer, bert_tokenizer, num_query_tokens=10, max_seq_length=2048, training=True) -> None:
         self.raw_dataset = load_dataset("parquet", data_files=str(data_path))['train']
         self.llm_tokenizer = llm_tokenizer
         self.bert_tokenizer = bert_tokenizer
@@ -247,6 +247,7 @@ class GraphDataset(Dataset):
             input = input[:idx] + \
                 f'\n\nstruct data representation tokens: {DEFAULT_GRAPH_PAD_TOKEN * self.num_query_tokens}' + \
                 input[idx:]
+            # input = f'{DEFAULT_GRAPH_PAD_TOKEN * self.num_query_tokens}' + input
         tokenized_input = self.llm_tokenizer(
             input, return_attention_mask=False, add_special_tokens=False
         )
@@ -258,7 +259,7 @@ class GraphDataset(Dataset):
 
         question = sample['question']
         question = ' '.join(question.split()[:128])
-        question = f'The query tokens for this "{question}" is {DEFAULT_GRAPH_PAD_TOKEN * self.num_query_tokens}'
+        question = f'The query tokens for question "{question}" is {DEFAULT_GRAPH_PAD_TOKEN * self.num_query_tokens}'
         tokenized_question = self.llm_tokenizer(question, return_attention_mask=False, add_special_tokens=False)
 
         # print(question)

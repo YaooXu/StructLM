@@ -172,9 +172,10 @@ class StructQformer(nn.Module):
 
             query_embeds = self.query_embeds_generator(graph, llm, llm_graph_pad_token_id)
 
-            query_embeds = self.projector1(query_embeds)
+            # query_embeds = self.projector1(query_embeds)
             # query_embeds = self.ln_norm1(query_embeds)
             
+            query_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
             query_atts = torch.ones(query_embeds.shape[:-1]).to(self.device)
             
             question_output = self.model(
@@ -294,9 +295,10 @@ class StructQformerLLM(nn.Module):
     ):
         llm = self.llm
 
-        llm_tokenizer.add_tokens([graph_pad_token], special_tokens=True)
         if llm_tokenizer.pad_token is None:
             llm_tokenizer.pad_token = llm_tokenizer.eos_token
+            
+        llm_tokenizer.add_tokens([graph_pad_token], special_tokens=True)
         self.llm_graph_pad_token_id = llm_tokenizer.convert_tokens_to_ids(
             [DEFAULT_GRAPH_PAD_TOKEN]
         )[0]

@@ -235,7 +235,7 @@ if __name__ == "__main__":
         )
         test_examples = load_jsonl(dataset_dir / f"ori_test.jsonl")
 
-        test_dataset = test_dataset.select(range(1000))
+        # test_dataset = test_dataset.select(range(10))
 
     data_collator = DataCollatorForGraphSupervisedDataset(llm_tokenizer)
 

@@ -82,6 +82,7 @@ def obtain_samples(process_idx, idxes_to_process):
 
         sample["question"] = question
         sample['encoder_inputs'] = uniskg_sample
+        assert uniskg_sample['question'] == question
 
         new_samples.append(sample)
         

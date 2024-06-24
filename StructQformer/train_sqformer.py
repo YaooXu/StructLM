@@ -1,7 +1,9 @@
-import random
 import sys
+
 sys.path.append("./")
 
+import random
+from utils.configure import Configure
 import os
 from peft.tuners.lora import LoraLayer
 from transformers.trainer_utils import PredictionOutput
@@ -67,7 +69,9 @@ class ModelArguments:
 
 
 @dataclass
-class DataArguments:
+class WarppedTrainingArguments(TrainingArguments):
+
+    # data args
     dataset_dir: str = field(default="dataset/webqsp/processed_files")
     max_desc_length: int = field(default=2048)
     max_seq_length: int = field(default=2560)
@@ -76,9 +80,8 @@ class DataArguments:
         default=None, metadata={"help": "The datasets processed stored"}
     )
 
+    cfg: str = field(default="qformer/v3.cfg")
 
-@dataclass
-class CustomTrainingArguments(TrainingArguments):
     output_dir: str = field(default="trainer_outputs")
 
     # to avoid Warning
@@ -96,51 +99,16 @@ class CustomTrainingArguments(TrainingArguments):
     metric_for_best_model: str = field(default="loss")
     greater_is_better: bool = field(default=False)
 
-    # double_quant: bool = field(
-    #     default=True,
-    #     metadata={"help": "Compress the quantization statistics through double quantization."},
-    # )
-    # quant_type: str = field(
-    #     default="nf4",
-    #     metadata={"help": "Quantization data type to use. Should be one of `fp4` or `nf4`."},
-    # )
-    # bits: int = field(default=16, metadata={"help": "How many bits to use."})
-    # lora_enable: bool = False
-    # lora_r: int = 64
-    # lora_alpha: int = 16
-    # lora_dropout: float = 0.05
-    # lora_weight_path: str = ""
-    # lora_bias: str = "none"
     disable_tqdm: bool = False
 
 
-# to load state dict of hytrel
-@dataclass
-class OptimizerConfig:
-    batch_size: int = 256
-    base_learning_rate: float = 1e-3
-    weight_decay: float = 0.02
-    adam_beta1: float = 0.9
-    adam_beta2: float = 0.98
-    adam_epsilon: float = 1e-5
-    lr_scheduler_type: transformers.SchedulerType = "linear"
-    warmup_step_ratio: float = 0.1
-    seed: int = 42
-    optimizer: str = "Adam"
-    adam_w_mode: bool = True
-    save_every_n_epochs: int = 1
-    save_top_k: int = 1
-    checkpoint_path: str = ""
-
-
 if __name__ == "__main__":
-    parser = transformers.HfArgumentParser((ModelArguments, DataArguments, CustomTrainingArguments))
-    model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+    parser = transformers.HfArgumentParser((WarppedTrainingArguments))
+    training_args, = parser.parse_args_into_dataclasses()
+
+    model_args = Configure.Get(training_args.cfg)
 
     training_args.run_name = training_args.output_dir.split("/")[-1]
-    training_args.dataset_dir = data_args.dataset_dir
-    training_args.max_desc_length = data_args.max_desc_length
-    training_args.max_seq_length = data_args.max_seq_length
 
     set_seed(training_args.seed)
     torch_dtype = (
@@ -163,9 +131,11 @@ if __name__ == "__main__":
     log_level = training_args.get_process_log_level()
     logger.setLevel(log_level)
 
-    llm_tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, use_fast=False)
+    llm_tokenizer = AutoTokenizer.from_pretrained(
+        model_args.llm.model_name_or_path, use_fast=False)
 
-    encoder_tokenizer = AutoTokenizer.from_pretrained(model_args.encoder_model_path, use_fast=False)
+    encoder_tokenizer = AutoTokenizer.from_pretrained(
+        model_args.encoder.model_name_or_path, use_fast=False)
 
     model = StructQformerLLM(model_args,
                              llm_tokenizer,
@@ -191,7 +161,7 @@ if __name__ == "__main__":
     if training_args.should_log:
         model.print_trainable_params()
 
-    dataset_dir = pathlib.Path(data_args.dataset_dir)
+    dataset_dir = pathlib.Path(training_args.dataset_dir)
 
     train_dataset, eval_dataset = None, None
     if training_args.do_train:
@@ -199,17 +169,17 @@ if __name__ == "__main__":
             dataset_dir / f"train.pq",
             llm_tokenizer,
             encoder_tokenizer,
-            max_seq_length=data_args.max_seq_length,
-            max_desc_length=data_args.max_desc_length,
-            num_query_tokens=model_args.num_query_tokens,
+            max_seq_length=training_args.max_seq_length,
+            max_desc_length=training_args.max_desc_length,
+            num_query_tokens=model_args.qformer.num_query_tokens,
         )
         eval_dataset = build_instruction_dataset(
             dataset_dir / f"val.pq",
             llm_tokenizer,
             encoder_tokenizer,
-            max_seq_length=data_args.max_seq_length,
-            max_desc_length=data_args.max_desc_length,
-            num_query_tokens=model_args.num_query_tokens,
+            max_seq_length=training_args.max_seq_length,
+            max_desc_length=training_args.max_desc_length,
+            num_query_tokens=model_args.qformer.num_query_tokens,
         )
         eval_dataset = eval_dataset.select(random.sample(
             range(len(eval_dataset)), k=min(10000, len(eval_dataset))))
@@ -219,9 +189,9 @@ if __name__ == "__main__":
             dataset_dir / f"test.pq",
             llm_tokenizer,
             encoder_tokenizer,
-            max_seq_length=data_args.max_seq_length,
-            max_desc_length=data_args.max_desc_length,
-            num_query_tokens=model_args.num_query_tokens,
+            max_seq_length=training_args.max_seq_length,
+            max_desc_length=training_args.max_desc_length,
+            num_query_tokens=model_args.qformer.num_query_tokens,
             training=False,
         )
         test_examples = load_jsonl(dataset_dir / f"ori_test.jsonl")

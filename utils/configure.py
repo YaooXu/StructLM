@@ -3,9 +3,9 @@ import configparser
 import datetime
 import os
 
-DEFAULT_CONFIGURE_DIR = "UniSKG/configure"
-DEFAULT_DATASET_DIR = "UniSKG/data"
-DEFAULT_MODEL_DIR = "UniSKG/models"
+DEFAULT_CONFIGURE_DIR = "configure"
+DEFAULT_DATASET_DIR = "data"
+DEFAULT_MODEL_DIR = "models"
 
 
 class Args(object):

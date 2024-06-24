@@ -82,74 +82,73 @@ class StructQformer(nn.Module):
         super().__init__()
 
         self.args = args
-
-        self.cross_attention_freq = args.cross_attention_freq
-        self.num_query_tokens = args.num_query_tokens
-        self.encoder_model_path = args.encoder_model_path
-        self.strategy = args.strategy
-        self.encoder_finetuning_type = args.encoder_finetuning_type
-
-        self.roberta_config = AutoConfig.from_pretrained('FacebookAI/roberta-base')
-        self.roberta_config.encoder_width = self.roberta_config.hidden_size
-        # insert cross-attention layer every other block
-        self.roberta_config.add_cross_attention = self.cross_attention_freq > 0
-        self.roberta_config.cross_attention_freq = self.cross_attention_freq
-        self.roberta_config.query_length = self.num_query_tokens
-
+        self.num_query_tokens = args.qformer.num_query_tokens
+        self.strategy = args.qformer.strategy
+        
         if self.strategy[:2] == "v2":
             self.encoder = Graphormer(args.encoder_model_path)
 
             # for roberta
-            self.roberta_config.add_cross_attention = True
-            self.roberta_config.is_decoder = True
-            self.roberta_config.use_dist_bias = False
+            self.qformer_config.add_cross_attention = True
+            self.qformer_config.is_decoder = True
+            self.qformer_config.use_dist_bias = False
             self.model = RobertaModel.from_pretrained(
-                'FacebookAI/roberta-base', config=self.roberta_config,
+                'FacebookAI/roberta-base', config=self.qformer_config,
             )
             # self.model = self.encoder.model
 
             self.query_token_embeds = nn.Parameter(
-                torch.zeros(self.num_query_tokens, self.roberta_config.hidden_size)
+                torch.zeros(self.num_query_tokens, self.qformer_config.hidden_size)
             )
             # self.query_embeds_generator = QueryEmbedsGenerator(self.num_query_tokens)
         elif self.strategy[:2] == "v3":
             from UniSKG.utils.configue import Configure
             from UniSKG.models.unified.prefixtuning import Model
 
-            if 'base' in self.encoder_model_path:
-                self.encoder_cfg = Configure.Get('Salesforce/T5_base_prefix_wikitq.cfg')
-            else:
-                self.encoder_cfg = Configure.Get('Salesforce/T5_large_prefix_wikitq.cfg')
-                
+            self.encoder_cfg = Configure.Get(args.encoder.cfg)
             self.encoder = Model(self.encoder_cfg)
-            if args.encoder_finetuning_type == 'freeze_all':
+            
+            if args.encoder.finetuning_type == 'freeze_all':
                 for name, param in self.encoder.named_parameters():
                     param.requires_grad = False
+            elif args.encoder.finetuning_type == 'lora_plm':
+                logger.info('adding lora model')
+                peft_config = LoraConfig(
+                    task_type=TaskType.SEQ_2_SEQ_LM,
+                    inference_mode=False,
+                    target_modules=args.encoder.target_modules.split(','),
+                    r=args.encoder.r,
+                    lora_alpha=args.encoder.lora_alpha,
+                    lora_dropout=args.encoder.lora_dropout,
+                )
+                self.encoder.pretrain_model = get_peft_model(self.encoder.pretrain_model, peft_config)                
             else:
                 # freeze_plm is default
                 pass
-                
-            self.query_token_embeds = nn.Parameter(
-                torch.zeros(self.num_query_tokens, self.roberta_config.hidden_size)
+                            
+            # for qformer
+            self.qformer_config = AutoConfig.from_pretrained(args.qformer.model_name_or_path)
+            self.qformer_config.add_cross_attention = True
+            self.qformer_config.is_decoder = True
+            self.qformer_config.use_dist_bias = False
+            
+            self.model = RobertaModel.from_pretrained(
+                args.qformer.model_name_or_path, config=self.qformer_config,
             )
             
-            # for roberta
-            self.roberta_config.add_cross_attention = True
-            self.roberta_config.is_decoder = True
-            self.roberta_config.use_dist_bias = False
-            self.model = RobertaModel.from_pretrained(
-                'FacebookAI/roberta-base', config=self.roberta_config,
+            self.query_token_embeds = nn.Parameter(
+                torch.zeros(self.num_query_tokens, self.qformer_config.hidden_size)
             )
+            self.projector1 = nn.Linear(self.encoder.config.hidden_size,
+                                    out_features=self.qformer_config.hidden_size)
+
+            self.projector2 = nn.Linear(self.qformer_config.hidden_size, 4096)
         else:
             self.encoder = None
             self.model = None
             self.query_token_embeds = nn.Parameter(torch.zeros(self.num_query_tokens, 4096))
-
-        self.projector1 = nn.Linear(self.encoder.config.hidden_size,
-                                    out_features=self.roberta_config.hidden_size)
-
-        self.projector2 = nn.Linear(self.roberta_config.hidden_size, 4096)
-
+            self.projector1 = self.projector2 = None
+            
         # self.ln_norm1 = nn.LayerNorm(self.encoder_config.hidden_size,
         #                              self.encoder_config.layer_norm_eps)
         # self.ln_norm2 = nn.LayerNorm(4096, self.encoder_config.layer_norm_eps)
@@ -159,10 +158,10 @@ class StructQformer(nn.Module):
     def init_weight(self):
         self.query_token_embeds.data.normal_(mean=0.0, std=0.02)
         for proj in [self.projector1, self.projector2]:
-            proj.weight.data.normal_(
-                mean=0.0, std=0.02)
-            if proj.bias is not None:
-                proj.bias.data.zero_()
+            if proj:
+                proj.weight.data.normal_(mean=0.0, std=0.02)
+                if proj.bias is not None:
+                    proj.bias.data.zero_()
 
         # for ln in [self.ln_norm1, self.ln_norm2]:
         #     ln.bias.data.zero_()
@@ -281,14 +280,13 @@ class StructQformerLLM(nn.Module):
     def __init__(self, args, llm_tokenizer, encoder_tokenizer, **kwargs) -> None:
         super().__init__()
 
-        self.num_query_tokens = args.num_query_tokens
-
         # set in init_tokenizer_and_embeds
         self.bert_graph_pad_token = None
         self.llm_graph_pad_token_id = None
         self.llm_pad_token_id = None
-        self.finetuning_type = args.finetuning_type
+
         self.args = args
+        self.num_query_tokens = args.qformer.num_query_tokens
 
         if self.num_query_tokens > 0:
             self.qformer = StructQformer(args)
@@ -301,26 +299,26 @@ class StructQformerLLM(nn.Module):
             # ]
             # self.qformer.resize_token_embeddings(len(encoder_tokenizer))
 
-            if args.ckpt_path is not None and not args.skip_encoder:
-                logger.info(f"loading qformer ckpt from {args.ckpt_path}")
+            if args.qformer.ckpt_path is not None and not args.qformer.skip_encoder:
+                logger.info(f"loading qformer ckpt from {args.qformer.ckpt_path}")
                 self.qformer.load_state_dict(torch.load(
-                    os.path.join(args.ckpt_path, "Qformer.bin")))
+                    os.path.join(args.qformer.ckpt_path, "Qformer.bin")))
 
             self.qformer = self.qformer.to(kwargs['torch_dtype'])
         else:
             self.qformer = None
 
         self.llm: LlamaForCausalLM = AutoModelForCausalLM.from_pretrained(
-            args.model_name_or_path,
-            attn_implementation=args.attn_implementation,
+            args.llm.model_name_or_path,
+            attn_implementation=args.llm.attn_implementation,
             **kwargs
         )
         self.init_tokenizer_and_embeds(llm_tokenizer, encoder_tokenizer, DEFAULT_GRAPH_PAD_TOKEN)
 
-        if args.finetuning_type == 'full':
+        if args.llm.finetuning_type == 'full':
             for name, param in self.llm.named_parameters():
                 param.requires_grad = True
-        elif args.finetuning_type == 'lora':
+        elif args.llm.finetuning_type == 'lora':
             if args.ckpt_path is not None:
                 logger.info(f'loading lora ckpt from {args.ckpt_path}')
                 self.llm.load_adapter(args.ckpt_path)
@@ -329,14 +327,14 @@ class StructQformerLLM(nn.Module):
                 peft_config = LoraConfig(
                     task_type=TaskType.CAUSAL_LM,
                     inference_mode=False,
-                    target_modules=args.target_modules.split(','),
-                    r=32,
-                    lora_alpha=64,
-                    lora_dropout=0.1,
+                    target_modules=args.llm.target_modules.split(','),
+                    r=args.llm.r,
+                    lora_alpha=args.llm.lora_alpha,
+                    lora_dropout=args.llm.lora_dropout,
                 )
                 self.llm = get_peft_model(self.llm, peft_config)
                 self.llm.print_trainable_parameters()
-        elif args.finetuning_type == 'freeze_backbone':
+        elif args.llm.finetuning_type == 'freeze_backbone':
             for name, param in self.llm.named_parameters():
                 param.requires_grad = False
         else:

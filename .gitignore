@@ -12,3 +12,5 @@ wandb
 .vscode
 nohup*
 tmp*
+UniSKG
+*.sh

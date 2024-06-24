@@ -52,17 +52,20 @@ class ModelArguments:
     num_query_tokens: int = field(default=10)
     cross_attention_freq: int = field(default=1)
 
+    encoder_finetuning_type: str = field(default='freeze_plm')
+
     finetuning_type: str = field(default='freeze_backbone')
     target_modules: str = field(default='q_proj,v_proj')
 
     strategy: str = field(default="pt")
 
-    skip_graph_encoder: bool = field(default=False)
+    skip_encoder: bool = field(default=False)
 
     ckpt_path: str = field(default=None)
 
     attn_implementation: str = field(default='flash_attention_2')
-    
+
+
 @dataclass
 class DataArguments:
     dataset_dir: str = field(default="dataset/webqsp/processed_files")
@@ -162,24 +165,11 @@ if __name__ == "__main__":
 
     llm_tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, use_fast=False)
 
-    bert_tokenizer = AutoTokenizer.from_pretrained(model_args.encoder_model_path, use_fast=False)
-    bert_tokenizer.add_tokens(
-        ["[TAB]", "[HEAD]", "[CELL]", "[ROW]", "scinotexp"], special_tokens=True
-    )
+    encoder_tokenizer = AutoTokenizer.from_pretrained(model_args.encoder_model_path, use_fast=False)
 
-    hypergraph_enc_config = AutoConfig.from_pretrained(model_args.encoder_model_path)
-    hypergraph_enc_config.update(
-        {
-            "vocab_size": len(bert_tokenizer),
-            "pre_norm": False,
-            "activation_dropout": 0.1,
-            "gated_proj": False,
-        }
-    )
-
-    model = StructQformerLLM(model_args, hypergraph_enc_config,
+    model = StructQformerLLM(model_args,
                              llm_tokenizer,
-                             bert_tokenizer,
+                             encoder_tokenizer,
                              use_cache=False if training_args.gradient_checkpointing else True,
                              torch_dtype=torch_dtype)
 
@@ -208,7 +198,7 @@ if __name__ == "__main__":
         train_dataset = build_instruction_dataset(
             dataset_dir / f"train.pq",
             llm_tokenizer,
-            bert_tokenizer,
+            encoder_tokenizer,
             max_seq_length=data_args.max_seq_length,
             max_desc_length=data_args.max_desc_length,
             num_query_tokens=model_args.num_query_tokens,
@@ -216,18 +206,19 @@ if __name__ == "__main__":
         eval_dataset = build_instruction_dataset(
             dataset_dir / f"val.pq",
             llm_tokenizer,
-            bert_tokenizer,
+            encoder_tokenizer,
             max_seq_length=data_args.max_seq_length,
             max_desc_length=data_args.max_desc_length,
             num_query_tokens=model_args.num_query_tokens,
         )
-        eval_dataset = eval_dataset.select(random.sample(range(len(eval_dataset)), k=min(10000, len(eval_dataset))))
+        eval_dataset = eval_dataset.select(random.sample(
+            range(len(eval_dataset)), k=min(10000, len(eval_dataset))))
 
     if training_args.do_train or training_args.do_predict:
         test_dataset = build_instruction_dataset(
             dataset_dir / f"test.pq",
             llm_tokenizer,
-            bert_tokenizer,
+            encoder_tokenizer,
             max_seq_length=data_args.max_seq_length,
             max_desc_length=data_args.max_desc_length,
             num_query_tokens=model_args.num_query_tokens,
@@ -237,7 +228,7 @@ if __name__ == "__main__":
 
         # test_dataset = test_dataset.select(range(10))
 
-    data_collator = DataCollatorForGraphSupervisedDataset(llm_tokenizer)
+    data_collator = DataCollatorForGraphSupervisedDataset(llm_tokenizer, encoder_tokenizer)
 
     trainer = StructQASeq2SeqTrainer(
         model=model,
@@ -250,7 +241,8 @@ if __name__ == "__main__":
         # compute_metrics=compute_metrics,
     )
 
-    callback = PredictionProgressCallback(trainer, llm_tokenizer, test_dataset, test_examples)
+    callback = PredictionProgressCallback(
+        trainer, llm_tokenizer, encoder_tokenizer, test_dataset, test_examples)
     trainer.add_callback(callback)
 
     if training_args.do_train:
@@ -262,6 +254,6 @@ if __name__ == "__main__":
             trainer.train()
 
     elif training_args.do_predict:
-        trainer.data_collator = DataCollatorForGenerating(llm_tokenizer)
+        trainer.data_collator = DataCollatorForGenerating(llm_tokenizer, encoder_tokenizer)
         logger.info("*** Predict ***")
         metrics = trainer.predict(test_dataset, test_examples)

@@ -51,7 +51,7 @@ TRAINING_ARGS_NAME = "training_args.bin"
 
 
 class PredictionProgressCallback(TrainerCallback):
-    def __init__(self, trainer, tokenizer, test_dataset, test_examples, num_samples=-1, freq=1):
+    def __init__(self, trainer, llm_tokenizer, encoder_tokenizer, test_dataset, test_examples, num_samples=-1, freq=1):
         """Initializes the WandbPredictionProgressCallback instance.
 
         Args:
@@ -66,7 +66,8 @@ class PredictionProgressCallback(TrainerCallback):
         """
         super().__init__()
         self.trainer = trainer
-        self.tokenizer = tokenizer
+        self.llm_tokenizer = llm_tokenizer
+        self.encoder_tokenizer = encoder_tokenizer
         if num_samples == -1:
             num_samples = len(test_dataset)
         self.sample_dataset = test_dataset.select(range(num_samples))
@@ -85,11 +86,11 @@ class PredictionProgressCallback(TrainerCallback):
         if args.should_log:
             logger.info(f"epoch {state.epoch}, {self.freq}")
 
-        self.trainer.data_collator = DataCollatorForGenerating(self.tokenizer)
+        self.trainer.data_collator = DataCollatorForGenerating(self.llm_tokenizer,self.encoder_tokenizer)
         # generate predictions
         metrics = self.trainer.predict(self.sample_dataset, self.test_examples)
 
-        self.trainer.data_collator = DataCollatorForGraphSupervisedDataset(self.tokenizer)
+        self.trainer.data_collator = DataCollatorForGraphSupervisedDataset(self.llm_tokenizer,self.encoder_tokenizer)
 
 
 def post_process_function(
@@ -243,7 +244,7 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
                 {'json_file': os.path.join(cur_output_dir, "predictions.json")}
             ))
             self.log(summary)
-            
+
         return output
 
     def prediction_step(
@@ -361,7 +362,8 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
         logger.info(f"Saving model checkpoint to {output_dir}")
 
         if self.model.finetuning_type != 'freeze_backbone':
-            supported_classes = (PreTrainedModel,) if not is_peft_available() else (PreTrainedModel, PeftModel)
+            supported_classes = (PreTrainedModel,) if not is_peft_available() else (
+                PreTrainedModel, PeftModel)
             # Save a trained model and configuration using `save_pretrained()`.
             # They can then be reloaded using `from_pretrained()`
             if not isinstance(self.model.llm, supported_classes):
@@ -376,8 +378,8 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
                     torch.save(_state_dict, os.path.join(output_dir, WEIGHTS_NAME))
             else:
                 self.model.llm.save_pretrained(
-                output_dir, state_dict=self.model.llm.state_dict(), safe_serialization=self.args.save_safetensors
-            )
+                    output_dir, state_dict=self.model.llm.state_dict(), safe_serialization=self.args.save_safetensors
+                )
 
         _state_dict = state_dict
         if _state_dict is None:

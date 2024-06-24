@@ -28,6 +28,8 @@ import datasets
 from StructQformer.convert_table_to_graph_tabert import BipartiteData, StructDataConverter, _get_dist_mat
 from utils.utils import load_json
 
+from transformers.data import DataCollatorWithPadding
+
 logger = logging.getLogger(__name__)
 
 
@@ -79,7 +81,7 @@ def move_tensor_to_device(input_dict, device):
 def build_instruction_dataset(
     data_path: Union[List[str], str],
     llm_tokenizer: transformers.PreTrainedTokenizer,
-    bert_tokenizer: transformers.PreTrainedTokenizer,
+    encoder_tokenizer: transformers.PreTrainedTokenizer,
     max_seq_length: int = 2560,
     max_desc_length: int = 2048,
     data_cache_dir=None,
@@ -94,18 +96,18 @@ def build_instruction_dataset(
     Args:
         data_path (Union[List[str], str]): _description_
         llm_tokenizer (transformers.PreTrainedTokenizer): tokenizer for down-stream LLM
-        bert_tokenizer (transformers.PreTrainedTokenizer): tokenizer for g-former
+        encoder_tokenizer (transformers.PreTrainedTokenizer): tokenizer for g-former
         max_seq_length (int, optional): _description_. Defaults to 256.
         max_desc_length: Defaults to 0
         data_cache_dir (_type_, optional): _description_. Defaults to None.
         preprocessing_num_workers (int, optional): _description_. Defaults to 10.
     """
 
-    return GraphDataset(data_path, llm_tokenizer, bert_tokenizer, num_query_tokens, max_seq_length, training)
+    return GraphDataset(data_path, llm_tokenizer, encoder_tokenizer, num_query_tokens, max_seq_length, training)
 
     assert max_seq_length > max_desc_length
 
-    converter = StructDataConverter(bert_tokenizer)
+    converter = StructDataConverter(encoder_tokenizer)
 
     def tokenization(examples):
         targets = []
@@ -141,7 +143,7 @@ def build_instruction_dataset(
         tokenized_targets = llm_tokenizer(
             targets, return_attention_mask=False, add_special_tokens=False
         )
-        tokenized_questions = bert_tokenizer(questions)
+        tokenized_questions = encoder_tokenizer(questions)
 
         all_input_ids = []
         all_labels = []
@@ -230,10 +232,10 @@ def build_instruction_dataset(
 
 
 class GraphDataset(Dataset):
-    def __init__(self, data_path, llm_tokenizer, bert_tokenizer, num_query_tokens=10, max_seq_length=2048, training=True) -> None:
+    def __init__(self, data_path, llm_tokenizer, encoder_tokenizer, num_query_tokens=10, max_seq_length=2048, training=True) -> None:
         self.raw_dataset = load_dataset("parquet", data_files=str(data_path))['train']
         self.llm_tokenizer = llm_tokenizer
-        self.bert_tokenizer = bert_tokenizer
+        self.encoder_tokenizer = encoder_tokenizer
         self.num_query_tokens = num_query_tokens
         self.max_seq_length = max_seq_length
         self.training = training
@@ -260,7 +262,8 @@ class GraphDataset(Dataset):
         question = sample['question']
         question = ' '.join(question.split()[:128])
         question = f'The query tokens for question "{question}" is {DEFAULT_GRAPH_PAD_TOKEN * self.num_query_tokens}'
-        tokenized_question = self.llm_tokenizer(question, return_attention_mask=False, add_special_tokens=False)
+        tokenized_question = self.llm_tokenizer(
+            question, return_attention_mask=False, add_special_tokens=False)
 
         # print(question)
 
@@ -280,37 +283,63 @@ class GraphDataset(Dataset):
             labels = torch.LongTensor([IGNORE_INDEX] * len(s))[:max_seq_length]
         question_ids = torch.LongTensor(q)
 
-        graph = sample['graph']
+        # for UniSKG
+        encoder_inputs = sample['encoder_inputs']
 
-        num_nodes = len(graph["node_types"])
+        seq_in = "{} ; structured knowledge: {}".format(
+            encoder_inputs["text_in"], encoder_inputs["struct_in"])
 
-        num_nodes = min(num_nodes, 512)
-        graph["node_types"] = torch.LongTensor(graph["node_types"])[:num_nodes]
-        graph["graph_attention_mask"] = torch.LongTensor([1] * num_nodes)
-        graph["node_token_ids"] = torch.LongTensor(graph["node_token_ids"])[:num_nodes, :]
-        # -1 -> 0
-        graph["dist_mat"] = torch.LongTensor(graph["dist_mat"])[:num_nodes, :num_nodes] + 1
+        tokenized_question_and_schemas = self.encoder_tokenizer(
+            seq_in,
+            padding="max_length",
+            truncation=True,
+            max_length=1024
+            # We found that set it as large as possible can boost the performance significantly
+            # , meanwhile, due to the t5 uses a relative position coding, we need to manually
+            # assign the max input length into some large numbers, instead of using the "max_model_length"
+            # ,which the default is 512, which will hurt the performance a lot.
+        )
+        tokenized_inferred = self.encoder_tokenizer(
+            target,
+            padding="max_length",
+            truncation=True,
+            max_length=128
+            # We set the max_length of "seq_out" during training is the same with the one in inference.
+        )
+
+        tokenized_inferred_input_ids = torch.LongTensor(tokenized_inferred.data["input_ids"])
+        # Here -100 will let the model not to compute the loss of the padding tokens.
+        tokenized_inferred_input_ids[tokenized_inferred_input_ids ==
+                                     self.encoder_tokenizer.pad_token_id] = -100
+
+        item_encoder_inputs = {
+            'input_ids': torch.LongTensor(tokenized_question_and_schemas.data["input_ids"]),
+            'attention_mask': torch.LongTensor(tokenized_question_and_schemas.data["attention_mask"]),
+            'labels': tokenized_inferred_input_ids,
+        }
 
         item = {
             "input_ids": input_ids,
             "labels": labels,
             "question_ids": question_ids,
-            "graph": graph,
+            "encoder_inputs": item_encoder_inputs,
         }
         return item
 
     def select(self, idxes):
         self.raw_dataset = self.raw_dataset.select(idxes)
         return self
-    
+
     def __len__(self):
         return len(self.raw_dataset)
+
 
 @dataclass
 class DataCollatorForGraphSupervisedDataset(object):
     """Collate examples for supervised fine-tuning."""
 
     llm_tokenizer: transformers.PreTrainedTokenizer
+    encoder_tokenizer: transformers.PreTrainedTokenizer
 
     def _set_llm_padding_side(self):
         # double-underscore name prevents subclasses from (accidentally) overriding the method!
@@ -333,18 +362,19 @@ class DataCollatorForGraphSupervisedDataset(object):
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
         self._set_llm_padding_side()
 
-        graphs = [instance["graph"] for instance in instances]
-
-        graphs = merge_graph(graphs)
-        # print(graphs['dist_mat'].shape)
+        encoder_inputs = DataCollatorWithPadding(self.encoder_tokenizer)(
+            [instance["encoder_inputs"] for instance in instances])
         
+        # graphs = merge_graph(graphs)
+        # print(graphs['dist_mat'].shape)
+
         # Qformer input
         question_ids = [instance["question_ids"] for instance in instances]
         question_ids = self.llm_tokenizer.pad({"input_ids": question_ids})["input_ids"]
-        batch_graph = {
+        encoder_inputs = {
             "question_input_ids": question_ids,
             "question_attention_mask": question_ids.ne(self.llm_tokenizer.pad_token_id),
-            "graph": graphs,
+            "encoder_inputs": encoder_inputs,
         }
 
         # LLM input
@@ -363,7 +393,7 @@ class DataCollatorForGraphSupervisedDataset(object):
             "attention_mask": attention_mask,
         }
 
-        batch["graph"] = batch_graph
+        batch["encoder_inputs"] = encoder_inputs
 
         return batch
 
@@ -385,10 +415,11 @@ if __name__ == "__main__":
     dataset_dir = pathlib.Path("data/8Tab_tasks_ori_input_no_inter")
 
     llm_tokenizer = AutoTokenizer.from_pretrained('meta-llama/Llama-2-7b-hf', use_fast=False)
-    bert_tokenizer = AutoTokenizer.from_pretrained("google-bert/bert-base-uncased", use_fast=False)
+    encoder_tokenizer = AutoTokenizer.from_pretrained(
+        "google-bert/bert-base-uncased", use_fast=False)
 
     graph_pad_token = DEFAULT_GRAPH_PAD_TOKEN
-    bert_tokenizer.add_tokens(
+    encoder_tokenizer.add_tokens(
         new_tokens=["[TAB]", "[HEAD]", "[CELL]", "[ROW]", "scinotexp"],
         special_tokens=True,
     )
@@ -403,7 +434,7 @@ if __name__ == "__main__":
     train_dataset = build_instruction_dataset(
         dataset_dir / f"train.pq",
         llm_tokenizer,
-        bert_tokenizer,
+        encoder_tokenizer,
         max_seq_length=max_seq_length,
         max_desc_length=max_desc_length,
         num_query_tokens=num_query_tokens,
@@ -413,7 +444,7 @@ if __name__ == "__main__":
     val_dataset = build_instruction_dataset(
         dataset_dir / f"val.pq",
         llm_tokenizer,
-        bert_tokenizer,
+        encoder_tokenizer,
         max_seq_length=max_seq_length,
         max_desc_length=max_desc_length,
         num_query_tokens=num_query_tokens,
@@ -423,7 +454,7 @@ if __name__ == "__main__":
     test_dataset = build_instruction_dataset(
         dataset_dir / f"test.pq",
         llm_tokenizer,
-        bert_tokenizer,
+        encoder_tokenizer,
         max_seq_length=max_seq_length,
         max_desc_length=max_desc_length,
         num_query_tokens=num_query_tokens,
@@ -488,7 +519,7 @@ if __name__ == "__main__":
     #         return optimizer
 
     # model_config = AutoConfig.from_pretrained("google-bert/bert-base-uncased")
-    # model_config.update({'vocab_size': len(bert_tokenizer), "pre_norm": False, "activation_dropout":0.1, "gated_proj": False})
+    # model_config.update({'vocab_size': len(encoder_tokenizer), "pre_norm": False, "activation_dropout":0.1, "gated_proj": False})
 
     # encoder = Encoder(model_config)
 

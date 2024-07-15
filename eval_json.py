@@ -4,11 +4,13 @@ import os
 import json
 from utils.configure import Configure
 
-def eval_loose_json(args):
+def eval_loose_json(args, data=None, record_results=False):
     cfgargs = Configure.Get('')
     evaluator = importlib.import_module("metrics.meta_tuning.evaluator").EvaluateTool(cfgargs)
-    with open(args.json_file, "rb") as f:
-        data = json.load(f)
+
+    if not data:
+        with open(args.json_file, "rb") as f:
+            data = json.load(f)
         
     if '<|end_of_text|>' in data[0]['prediction']:
         for item in data:
@@ -19,9 +21,11 @@ def eval_loose_json(args):
     summary = evaluator.evaluate(preds, labs, "test")
     print(summary)
     
-    output_path = args.json_file.replace('.json', '_summary.json')
-    with open(output_path, "w") as f:
-        json.dump(summary, f, indent=4)
+    if record_results:
+        output_path = args.json_file.replace('.json', '_summary.json')
+        with open(output_path, "w") as f:
+            json.dump(summary, f, indent=4)
+    
     return summary
 
 def main(args):

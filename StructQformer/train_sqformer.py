@@ -13,6 +13,7 @@ from transformers import (
     Trainer,
     TrainingArguments,
     set_seed,
+    EarlyStoppingCallback,
 )
 from StructQformer.models import StructQformerLLM
 from StructQformer.SQformer_dataset_tabert import (
@@ -95,9 +96,9 @@ class WarppedTrainingArguments(TrainingArguments):
 
     predict_with_generate: bool = field(default=True)
 
-    load_best_model_at_end: bool = field(default=True)
-    metric_for_best_model: str = field(default="loss")
-    greater_is_better: bool = field(default=False)
+    load_best_model_at_end: bool = field(default=False)
+    metric_for_best_model: str = field(default="avr")
+    greater_is_better: bool = field(default=True)
 
     disable_tqdm: bool = False
 
@@ -108,7 +109,7 @@ if __name__ == "__main__":
 
     model_args = Configure.Get(training_args.cfg)
 
-    training_args.run_name = training_args.output_dir.split("/")[-1]
+    training_args.run_name = training_args.cfg
 
     set_seed(training_args.seed)
     torch_dtype = (
@@ -196,7 +197,9 @@ if __name__ == "__main__":
         )
         test_examples = load_jsonl(dataset_dir / f"ori_test.jsonl")
 
-        # test_dataset = test_dataset.select(range(10))
+    if "debug" in training_args.output_dir:
+        test_dataset = test_dataset.select(range(10))
+        eval_dataset = eval_dataset.select(range(10))
 
     data_collator = DataCollatorForGraphSupervisedDataset(llm_tokenizer, encoder_tokenizer)
 
@@ -204,24 +207,24 @@ if __name__ == "__main__":
         model=model,
         args=training_args,
         train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
+        eval_dataset=test_dataset,
+        eval_examples=test_examples,
         tokenizer=llm_tokenizer,
+        encoder_tokenizer=encoder_tokenizer,
         data_collator=data_collator,
         post_process_function=post_process_function,
         # compute_metrics=compute_metrics,
     )
 
-    callback = PredictionProgressCallback(
-        trainer, llm_tokenizer, encoder_tokenizer, test_dataset, test_examples)
-    trainer.add_callback(callback)
+    # callback = PredictionProgressCallback(
+    #     trainer, llm_tokenizer, encoder_tokenizer, test_dataset, test_examples)
+    # trainer.add_callback(callback)
 
+    early_stopping_callback = EarlyStoppingCallback(early_stopping_patience=3)
+    trainer.add_callback(early_stopping_callback)
+    
     if training_args.do_train:
-        if "debug" not in training_args.output_dir and list(
-            pathlib.Path(training_args.output_dir).glob("checkpoint-*")
-        ):
-            trainer.train(resume_from_checkpoint=True)
-        else:
-            trainer.train()
+        trainer.train()
 
     elif training_args.do_predict:
         trainer.data_collator = DataCollatorForGenerating(llm_tokenizer, encoder_tokenizer)

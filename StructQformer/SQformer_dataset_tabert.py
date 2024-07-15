@@ -250,6 +250,8 @@ class GraphDataset(Dataset):
                 f'\n\nstruct data representation tokens: {DEFAULT_GRAPH_PAD_TOKEN * self.num_query_tokens}' + \
                 input[idx:]
             # input = f'{DEFAULT_GRAPH_PAD_TOKEN * self.num_query_tokens}' + input
+        # GRAPH_PAD_TOKEN_ID = self.llm_tokenizer.convert_tokens_to_ids([DEFAULT_GRAPH_PAD_TOKEN])[0]
+        
         tokenized_input = self.llm_tokenizer(
             input, return_attention_mask=False, add_special_tokens=False
         )

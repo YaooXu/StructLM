@@ -28,7 +28,7 @@ wandb online
 # qformer_ckpt_path=StructLM_cwq_webqsp/v2.5_1792_2048_10_1_0.05_1e-5/checkpoint-10000/Qformer.bin
         # --qformer_ckpt_path=${qformer_ckpt_path} \
 
-        # --skip_graph_encoder \
+        # --skip_encoder \
 
 model_name_or_path=TIGER-Lab/StructLM-7B-Mistral
 # meta-llama/Meta-Llama-3-8B

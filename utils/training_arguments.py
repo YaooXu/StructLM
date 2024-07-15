@@ -59,7 +59,7 @@ class WrappedSeq2SeqTrainingArguments(Seq2SeqTrainingArguments):
         default = False, metadata={
             "help": "Whether to use VLLM. (Hack)"}
     )
-        
+
     @property 
     def place_model_on_device(self):
         """

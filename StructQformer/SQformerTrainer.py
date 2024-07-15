@@ -74,23 +74,20 @@ class PredictionProgressCallback(TrainerCallback):
         self.test_examples = test_examples[:num_samples]
         self.freq = freq
 
-    # # for DEBUG
-    # def on_epoch_begin(self, args, state, control, **kwargs):
-    #     super().on_epoch_begin(args, state, control, **kwargs)
-    #     self.sample_dataset = self.sample_dataset.select(range(100))
-    #     self.test_examples = self.test_examples[:100]
-    def on_epoch_end(self, args, state, control, **kwargs):
-        super().on_epoch_end(args, state, control, **kwargs)
-        # control the frequency of logging by logging the predictions
-        # every `freq` epochs
+    def on_evaluate(self, args, state, control, **kwargs):
+        super().on_evaluate(args, state, control, **kwargs)
+
         if args.should_log:
             logger.info(f"epoch {state.epoch}, {self.freq}")
 
-        self.trainer.data_collator = DataCollatorForGenerating(self.llm_tokenizer,self.encoder_tokenizer)
+        self.trainer.data_collator = DataCollatorForGenerating(
+            self.llm_tokenizer, self.encoder_tokenizer)
+
         # generate predictions
         metrics = self.trainer.predict(self.sample_dataset, self.test_examples)
 
-        self.trainer.data_collator = DataCollatorForGraphSupervisedDataset(self.llm_tokenizer,self.encoder_tokenizer)
+        self.trainer.data_collator = DataCollatorForGraphSupervisedDataset(
+            self.llm_tokenizer, self.encoder_tokenizer)
 
 
 def post_process_function(
@@ -129,10 +126,12 @@ def post_process_function(
 
 
 class StructQASeq2SeqTrainer(Seq2SeqTrainer):
-    def __init__(self, *args, eval_examples=None, post_process_function=None, **kwargs):
+    def __init__(self, *args, eval_examples=None, post_process_function=None, encoder_tokenizer=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.eval_examples = eval_examples
         self.post_process_function = post_process_function
+        self.encoder_tokenizer = encoder_tokenizer
+        self.llm_tokenizer = self.tokenizer
 
     def evaluate(
         self,
@@ -142,6 +141,10 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
         metric_key_prefix: str = "eval",
         **gen_kwargs,
     ) -> Dict[str, float]:
+        # for generating
+        self.data_collator = DataCollatorForGenerating(
+            self.llm_tokenizer, self.encoder_tokenizer)
+        
         gen_kwargs = gen_kwargs.copy()
 
         self._gen_kwargs = gen_kwargs
@@ -161,12 +164,16 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
             output = eval_loop(
                 eval_dataloader,
                 description="Evaluation",
-                prediction_loss_only=True,
+                prediction_loss_only=False,
                 ignore_keys=ignore_keys,
                 metric_key_prefix=metric_key_prefix,
             )
         finally:
             self.compute_metrics = compute_metrics
+
+            self.data_collator = DataCollatorForGraphSupervisedDataset(
+                self.llm_tokenizer, self.encoder_tokenizer)
+
         total_batch_size = self.args.eval_batch_size * self.args.world_size
         if f"{metric_key_prefix}_jit_compilation_time" in output.metrics:
             start_time += output.metrics[f"{metric_key_prefix}_jit_compilation_time"]
@@ -180,7 +187,21 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
         )
 
         metrics = output.metrics
+
+        predictions = self.post_process_function(self.eval_examples, output, self.tokenizer)
+
+        summary = eval_loose_json(easydict.EasyDict({}), data=predictions)
+        summary['eval_avr'] = summary.pop('avr')
+        output.metrics.update(summary)
+
         if self.args.should_log:
+            cur_output_dir = f"{self.args.output_dir}/{metric_key_prefix}_{self.state.global_step}"
+            os.makedirs(cur_output_dir, exist_ok=True)
+
+            logger.info(f'writing predictions.json to {cur_output_dir}')
+            with open(os.path.join(cur_output_dir, "predictions.json"), "w") as f:
+                json.dump(predictions, f)
+
             # Only the main node log the results by default
             self.log(metrics)
 
@@ -361,7 +382,7 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
         os.makedirs(output_dir, exist_ok=True)
         logger.info(f"Saving model checkpoint to {output_dir}")
 
-        if self.model.finetuning_type != 'freeze_backbone':
+        if self.model.args.llm.finetuning_type != 'freeze_backbone':
             supported_classes = (PreTrainedModel,) if not is_peft_available() else (
                 PreTrainedModel, PeftModel)
             # Save a trained model and configuration using `save_pretrained()`.

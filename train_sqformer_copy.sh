@@ -59,7 +59,7 @@ for model_name_or_path in meta-llama/Llama-2-7b-hf ; do
                 --model_name_or_path=${model_name_or_path} \
                 --encoder_model_path=${encoder_model_path} \
                 --do_train \
-                --skip_graph_encoder \
+                --skip_encoder \
                 --load_best_model_at_end=False \
                 --finetuning_type=${finetuning_type} \
                 --overwrite_output_dir \

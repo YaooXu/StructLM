@@ -2,23 +2,26 @@ from collections import OrderedDict
 import logging
 from math import sqrt
 import os
+from pathlib import Path
 from typing import Optional
+from safetensors import safe_open
 import torch
 from transformers import (
     LlamaConfig,
     LlamaModel,
-    LlamaForCausalLM,
     AutoTokenizer,
     AutoModelForCausalLM,
     AutoConfig,
     AutoModel,
 )
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
+from StructQformer.models.base_models.modeling_llama import LlamaForCausalLM
 from StructQformer.models.base_models.modeling_roberta import RobertaEncoder, RobertaModel
+from StructQformer.models.base_models.modeling_t5_qformer import T5ForConditionalGeneration
 from StructQformer.models.graphormer.graphormer import Graphormer
-from UniSKG import utils
 
 from models.hytrel import HyperGraphEncoder
+from utils.configure import Configure
 
 # from model.encoder_geo import GraphEncoder
 
@@ -63,6 +66,7 @@ class QueryEmbedsGenerator(nn.Module):
 
             new_inputs_embeds[i][:cur_graph_pad_st_idx] += cur_inputs_embeds[:cur_graph_pad_st_idx]
             new_inputs_embeds[i][cur_graph_pad_st_idx: cur_graph_pad_ed_idx] += query_token_embeds
+            new_inputs_embeds[i][cur_graph_pad_ed_idx:] += cur_inputs_embeds[cur_graph_pad_ed_idx:]
 
         # LLM generates query tokens
         output = llm(inputs_embeds=new_inputs_embeds,
@@ -84,7 +88,10 @@ class StructQformer(nn.Module):
         self.args = args
         self.num_query_tokens = args.qformer.num_query_tokens
         self.strategy = args.qformer.strategy
-        
+
+        if 'inter' in self.strategy:
+            self.query_embeds_generator = QueryEmbedsGenerator(self.num_query_tokens)
+                
         if self.strategy[:2] == "v2":
             self.encoder = Graphormer(args.encoder_model_path)
 
@@ -92,7 +99,7 @@ class StructQformer(nn.Module):
             self.qformer_config.add_cross_attention = True
             self.qformer_config.is_decoder = True
             self.qformer_config.use_dist_bias = False
-            self.model = RobertaModel.from_pretrained(
+            self.decoder = RobertaModel.from_pretrained(
                 'FacebookAI/roberta-base', config=self.qformer_config,
             )
             # self.model = self.encoder.model
@@ -102,16 +109,20 @@ class StructQformer(nn.Module):
             )
             # self.query_embeds_generator = QueryEmbedsGenerator(self.num_query_tokens)
         elif self.strategy[:2] == "v3":
-            from UniSKG.utils.configue import Configure
-            from UniSKG.models.unified.prefixtuning import Model
+            # if 'prefix' in args.encoder.cfg:··
+            #     from UnifiedSKG.models.unified.prefixtuning import Model
+            # elif 'finetune' in args.encoder.cfg:
+            #     from UnifiedSKG.models.unified.finetune import Model
 
-            self.encoder_cfg = Configure.Get(args.encoder.cfg)
-            self.encoder = Model(self.encoder_cfg)
-            
-            if args.encoder.finetuning_type == 'freeze_all':
-                for name, param in self.encoder.named_parameters():
-                    param.requires_grad = False
-            elif args.encoder.finetuning_type == 'lora_plm':
+            t5_config = AutoConfig.from_pretrained(args.encoder.model_name_or_path)
+            t5_config.num_query_tokens = 10
+            self.t5 = T5ForConditionalGeneration.from_pretrained(args.encoder.model_name_or_path, config=t5_config)
+            self.encoder = self.t5.encoder
+            self.decoder = self.t5.decoder
+                           
+            if args.encoder.finetuning_type == 'full':
+                self.t5.requires_grad_(True)
+            elif args.encoder.finetuning_type == 'lora':
                 logger.info('adding lora model')
                 peft_config = LoraConfig(
                     task_type=TaskType.SEQ_2_SEQ_LM,
@@ -121,37 +132,41 @@ class StructQformer(nn.Module):
                     lora_alpha=args.encoder.lora_alpha,
                     lora_dropout=args.encoder.lora_dropout,
                 )
-                self.encoder.pretrain_model = get_peft_model(self.encoder.pretrain_model, peft_config)                
+                self.t5 = get_peft_model(
+                    self.t5, peft_config)
+            elif args.encoder.finetuning_type == 'freeze_enc_full_dec':
+                self.encoder.requires_grad_(False)
+                self.decoder.requires_grad_(True)
             else:
-                # freeze_plm is default
-                pass
-                            
-            # for qformer
-            self.qformer_config = AutoConfig.from_pretrained(args.qformer.model_name_or_path)
-            self.qformer_config.add_cross_attention = True
-            self.qformer_config.is_decoder = True
-            self.qformer_config.use_dist_bias = False
-            
-            self.model = RobertaModel.from_pretrained(
-                args.qformer.model_name_or_path, config=self.qformer_config,
-            )
-            
-            self.query_token_embeds = nn.Parameter(
-                torch.zeros(self.num_query_tokens, self.qformer_config.hidden_size)
-            )
-            self.projector1 = nn.Linear(self.encoder.config.hidden_size,
-                                    out_features=self.qformer_config.hidden_size)
+                raise NotImplementedError
 
-            self.projector2 = nn.Linear(self.qformer_config.hidden_size, 4096)
+            self.t5.query_tokens_embeds.requires_grad_(True)
+            
+            # # for qformer
+            # self.qformer_config = AutoConfig.from_pretrained(args.qformer.model_name_or_path)
+            # self.qformer_config.add_cross_attention = True
+            # self.qformer_config.is_decoder = True
+            # self.qformer_config.use_dist_bias = False
+
+            # self.decoder = RobertaModel.from_pretrained(
+            #     args.qformer.model_name_or_path, config=self.qformer_config,
+            # )
+
+            self.query_token_embeds = nn.Parameter(
+                torch.zeros(self.num_query_tokens, self.encoder.config.hidden_size)
+            )
+            self.projector1 = nn.Linear(4096,
+                                        out_features=self.encoder.config.hidden_size)
+
+            self.projector2 = nn.Linear(self.encoder.config.hidden_size, 4096)
         else:
             self.encoder = None
-            self.model = None
+            self.decoder = None
             self.query_token_embeds = nn.Parameter(torch.zeros(self.num_query_tokens, 4096))
             self.projector1 = self.projector2 = None
-            
-        # self.ln_norm1 = nn.LayerNorm(self.encoder_config.hidden_size,
-        #                              self.encoder_config.layer_norm_eps)
-        # self.ln_norm2 = nn.LayerNorm(4096, self.encoder_config.layer_norm_eps)
+
+        self.ln_norm1 = nn.LayerNorm(self.encoder.config.hidden_size)
+        self.ln_norm2 = nn.LayerNorm(4096)
 
         self.init_weight()
 
@@ -175,7 +190,7 @@ class StructQformer(nn.Module):
 
     @property
     def base_model(self):
-        return self.model
+        return self.decoder
 
     # as this value is added after initializing the model
     @property
@@ -184,7 +199,7 @@ class StructQformer(nn.Module):
 
     @property
     def device(self):
-        return self.model.device
+        return self.decoder.device
 
     def gen_query_embeds_pt(self, graph, llm, llm_graph_pad_token_id):
         # vanilla prompt tuning
@@ -201,7 +216,7 @@ class StructQformer(nn.Module):
         else:
             graph_output = self.encoder(graph['graph'])
             encoder_hidden_states = self.projector1(graph_output.last_hidden_state)
-            
+
             graph_attention_mask = graph['graph']["graph_attention_mask"]
 
             # query_embeds = self.query_embeds_generator(graph, llm, llm_graph_pad_token_id)
@@ -211,7 +226,7 @@ class StructQformer(nn.Module):
             query_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
             query_atts = torch.ones(query_embeds.shape[:-1]).to(self.device)
 
-            question_output = self.model(
+            question_output = self.decoder(
                 inputs_embeds=query_embeds,
                 attention_mask=query_atts,
                 encoder_hidden_states=encoder_hidden_states,
@@ -235,32 +250,43 @@ class StructQformer(nn.Module):
         if self.args.skip_encoder:
             res_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
         else:
-            graph_output = self.encoder(**encoder_inputs['encoder_inputs'])
-            encoder_hidden_states = self.projector1(graph_output.last_hidden_state)
+            encoder_inputs['encoder_inputs'].pop('labels')
 
-            encoder_attention_mask = encoder_inputs['encoder_inputs']['attention_mask']
+            encoder_output = self.t5(only_return_query_embeds=True, **encoder_inputs['encoder_inputs'])
+            res_embeds = encoder_output
+            
+            # res_embeds = self.ln_norm1(encoder_output)
+            # print(res_embeds.norm(dim=-1))
+            # encoder_hidden_states = encoder_output.last_hidden_state
+            # encoder_attention_mask = encoder_inputs['encoder_inputs']['attention_mask']
 
-            # query_embeds = self.projector1(query_embeds)
-            # query_embeds = self.ln_norm1(query_embeds)
+            # if 'inter' in self.strategy:
+            #     # inter
+            #     query_embeds = self.query_embeds_generator(encoder_inputs, llm, llm_graph_pad_token_id)
+            #     query_embeds = self.projector1(query_embeds)
+            # else:
+            #     # not inter
+            #     query_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
+            
+            # query_atts = torch.ones(query_embeds.shape[:-1]).to(self.device)
 
-            query_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
-            query_atts = torch.ones(query_embeds.shape[:-1]).to(self.device)
-
-            question_output = self.model(
-                inputs_embeds=query_embeds,
-                attention_mask=query_atts,
-                encoder_hidden_states=encoder_hidden_states,
-                encoder_attention_mask=encoder_attention_mask,
-                # query_length=self.num_query_tokens,
-                # use_cache=False,
-            )
-            res_embeds = question_output.last_hidden_state[:, -self.num_query_tokens:, :]
-
+            # question_output = self.decoder(
+            #     inputs_embeds=query_embeds,
+            #     attention_mask=query_atts,
+            #     encoder_hidden_states=encoder_hidden_states,
+            #     encoder_attention_mask=encoder_attention_mask,
+            #     # query_length=self.num_query_tokens,
+            #     # use_cache=False,
+            # )
+            # res_embeds = question_output.last_hidden_state
+            
         # print(res_embeds.norm(dim=-1))
         res_embeds = self.projector2(res_embeds)
-        # res_embeds = self.ln_norm2(res_embeds)
-        # print(res_embeds.norm(dim=-1))
+        res_embeds = self.ln_norm2(res_embeds)
 
+        # print('q', query_embeds.norm(dim=-1))
+        # print('r', res_embeds.norm(dim=-1))
+        
         return res_embeds
 
     def forward(self, encoder_inputs, llm, llm_graph_pad_token_id):
@@ -291,7 +317,7 @@ class StructQformerLLM(nn.Module):
         if self.num_query_tokens > 0:
             self.qformer = StructQformer(args)
 
-            # TODO: not need in UniSKG
+            # TODO: not need in UnifiedSKG
             # encoder_tokenizer.add_tokens(["[TAB]", "[HEAD]", "[CELL]", "[ROW]",
             #                               "scinotexp"], special_tokens=True)
             # self.bert_graph_pad_token = encoder_tokenizer.convert_tokens_to_ids([DEFAULT_GRAPH_PAD_TOKEN])[
@@ -308,7 +334,7 @@ class StructQformerLLM(nn.Module):
         else:
             self.qformer = None
 
-        self.llm: LlamaForCausalLM = AutoModelForCausalLM.from_pretrained(
+        self.llm: LlamaForCausalLM = LlamaForCausalLM.from_pretrained(
             args.llm.model_name_or_path,
             attn_implementation=args.llm.attn_implementation,
             **kwargs

@@ -20,73 +20,70 @@ num_query_tokens=10
 cross_attention_freq=1
 finetuning_type=freeze_backbone
 
-# dataset_dir=data_g_retrieve/roberta/wikitq
-dataset_dir=data/roberta/wikitq
-
 wandb online
 
 # qformer_ckpt_path=StructLM_cwq_webqsp/v2.5_1792_2048_10_1_0.05_1e-5/checkpoint-10000/Qformer.bin
         # --qformer_ckpt_path=${qformer_ckpt_path} \
 
-        # --skip_graph_encoder \
+        # --skip_encoder \
 
 # meta-llama/Meta-Llama-3-8B
 # model_name_or_path=codellama/CodeLlama-7b-Instruct-hf
     # --gradient_checkpointing \
 
-model_name_or_path=meta-llama/Llama-2-7b-hf
-encoder_model_path=FacebookAI/roberta-base
+dataset_dir=data/uniskg/wikitq
+roberta_size=large
+ft_type=lora
 
-for model_name_or_path in meta-llama/Llama-2-7b-hf codellama/CodeLlama-7b-Instruct-hf ; do 
+t5_ft_type=fre_enc-full_dec
+t5_model_type=scrach
+t5_size=large
 
-    for finetuning_type in full ; do
-    
-        for num_query_tokens in 10 ; do
+llm=llama
 
-            strategy=v2.6
+gas=1
 
-            if [[ "$finetuning_type" == "freeze_backbone" && "$num_query_tokens" -eq 0 ]]; then
-                strategy="pt"
-                num_query_tokens=10
-            fi
+for t5_size in base ; do
 
-            model_name=$(basename "$model_name_or_path")
-            encoder_name=$(basename "$encoder_model_path")
-            export WANDB_PROJECT=$(basename "$dataset_dir")
+    for t5_ft_type in freeze_enc_full_dec ; do
 
-                # --gradient_checkpointing \
-            deepspeed --master_port=${master_port} StructQformer/train_sqformer.py \
-                --model_name_or_path=${model_name_or_path} \
-                --encoder_model_path=${encoder_model_path} \
-                --do_train \
-                --load_best_model_at_end=False \
-                --finetuning_type=${finetuning_type} \
-                --overwrite_output_dir \
-                --deepspeed=${deepspeed_config_file} \
-                --do_eval \
-                --bf16 \
-                --strategy=${strategy} \
-                --num_query_tokens=${num_query_tokens} \
-                --max_desc_length=${max_desc_length} \
-                --max_seq_length=${max_seq_length} \
-                --cross_attention_freq=${cross_attention_freq} \
-                --dataset_dir=${dataset_dir} \
-                --output_dir=/mnt/userdata/StructLM/outputs/${dataset_dir}/5e_28_no_inter_${model_name}_${encoder_name}_${finetuning_type}_${strategy}_${max_desc_length}_${max_seq_length}_${num_query_tokens}_${cross_attention_freq}_${wd}_${lr} \
-                --seed=0 \
-                --num_train_epochs=${num_train_epochs} \
-                --per_device_train_batch_size=2 \
-                --per_device_eval_batch_size=4 \
-                --gradient_accumulation_steps=8 \
-                --save_strategy=epoch \
-                --evaluation_strategy=steps \
-                --eval_steps=0.2 \
-                --save_total_limit=1 \
-                --learning_rate=${lr} \
-                --weight_decay=${wd} \
-                --warmup_ratio=0.03 \
-                --lr_scheduler_type=cosine \
-                --logging_steps=50 \
-                --report_to wandb
+        for t5_model_type in scrach ; do
+
+        # cfg=v3.2-roberta_${roberta_size}-${t5_ft_type}_T5_${t5_size}-${ft_type}_${llm}-10.cfg
+        # cfg=t5_qformer/v3.3-${t5_ft_type}_trained_T5_${t5_size}-lora_${llm}-10.cfg
+        cfg=uniskg/v3-lora_all_trained_T5_large-lora_llama-10.cfg
+
+        echo ${cfg}
+
+        export WANDB_PROJECT=$(basename "$dataset_dir")
+
+            # --gradient_checkpointing \
+        deepspeed --master_port=${master_port} StructQformer/train_sqformer.py \
+            --do_train \
+            --bf16 \
+            --deepspeed=${deepspeed_config_file} \
+            --cfg=${cfg} \
+            --load_best_model_at_end=True \
+            --do_eval \
+            --max_desc_length=${max_desc_length} \
+            --max_seq_length=${max_seq_length} \
+            --dataset_dir=${dataset_dir} \
+            --overwrite_output_dir \
+            --output_dir=/mnt/userdata/StructLM/outputs/${dataset_dir}/${cfg} \
+            --seed=0 \
+            --num_train_epochs=${num_train_epochs} \
+            --per_device_train_batch_size=2 \
+            --gradient_accumulation_steps=${gas} \
+            --per_device_eval_batch_size=8 \
+            --save_strategy=epoch \
+            --evaluation_strategy=epoch \
+            --save_total_limit=1 \
+            --learning_rate=${lr} \
+            --weight_decay=${wd} \
+            --warmup_ratio=0.05 \
+            --lr_scheduler_type=cosine \
+            --logging_steps=50 \
+            --report_to wandb
         done
     done
 done

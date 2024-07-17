@@ -16,9 +16,9 @@ from transformers import (
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from StructQformer.models.base_models.modeling_roberta import RobertaEncoder, RobertaModel
 from StructQformer.models.graphormer.graphormer import Graphormer
-from UniSKG import utils
 
 from models.hytrel import HyperGraphEncoder
+from utils.configure import Configure
 
 # from model.encoder_geo import GraphEncoder
 
@@ -102,16 +102,23 @@ class StructQformer(nn.Module):
             )
             # self.query_embeds_generator = QueryEmbedsGenerator(self.num_query_tokens)
         elif self.strategy[:2] == "v3":
-            from UniSKG.utils.configue import Configure
             from UniSKG.models.unified.prefixtuning import Model
 
-            self.encoder_cfg = Configure.Get(args.encoder.cfg)
-            self.encoder = Model(self.encoder_cfg)
+            self.uniskg = Model(Configure.Get(args.encoder.cfg))
+            if args.encoder.not_load:
+                self.uniskg.config.use_prefix = True
+            else:
+                self.uniskg.config.use_prefix = True
+                logger.info(f'loading from {self.args.encoder.model_name_or_path}')
+                self.uniskg.load(self.args.encoder.model_name_or_path)
+                
+            # self.uniskg.requires_grad_(False)
             
-            if args.encoder.finetuning_type == 'freeze_all':
-                for name, param in self.encoder.named_parameters():
-                    param.requires_grad = False
-            elif args.encoder.finetuning_type == 'lora_plm':
+            self.t5_config= self.uniskg.pretrain_model.config
+            
+            if args.encoder.finetuning_type == 'freeze':
+                self.uniskg.pretrain_model.requires_grad_(False)
+            elif args.encoder.finetuning_type == 'lora_decoder':
                 logger.info('adding lora model')
                 peft_config = LoraConfig(
                     task_type=TaskType.SEQ_2_SEQ_LM,
@@ -121,37 +128,48 @@ class StructQformer(nn.Module):
                     lora_alpha=args.encoder.lora_alpha,
                     lora_dropout=args.encoder.lora_dropout,
                 )
-                self.encoder.pretrain_model = get_peft_model(self.encoder.pretrain_model, peft_config)                
-            else:
-                # freeze_plm is default
-                pass
+                self.uniskg.pretrain_model.decoder = get_peft_model(self.uniskg.pretrain_model.decoder, peft_config)                
+                self.uniskg.pretrain_model.decoder.print_trainable_parameters()
+            elif args.encoder.finetuning_type == 'lora_all':
+                logger.info('adding lora model')
+                peft_config = LoraConfig(
+                    task_type=TaskType.SEQ_2_SEQ_LM,
+                    inference_mode=False,
+                    target_modules=args.encoder.target_modules.split(','),
+                    r=args.encoder.r,
+                    lora_alpha=args.encoder.lora_alpha,
+                    lora_dropout=args.encoder.lora_dropout,
+                )
+                self.uniskg.pretrain_model = get_peft_model(self.uniskg.pretrain_model, peft_config)                
+                self.uniskg.pretrain_model.print_trainable_parameters()                
+            elif args.encoder.finetuning_type == 'full_decoder':
+                self.uniskg.pretrain_model.decoder.requires_grad_(True)
                             
-            # for qformer
-            self.qformer_config = AutoConfig.from_pretrained(args.qformer.model_name_or_path)
-            self.qformer_config.add_cross_attention = True
-            self.qformer_config.is_decoder = True
-            self.qformer_config.use_dist_bias = False
+            # # for qformer
+            # self.qformer_config = AutoConfig.from_pretrained(args.qformer.model_name_or_path)
+            # self.qformer_config.add_cross_attention = True
+            # self.qformer_config.is_decoder = True
+            # self.qformer_config.use_dist_bias = False
             
-            self.model = RobertaModel.from_pretrained(
-                args.qformer.model_name_or_path, config=self.qformer_config,
-            )
+            # self.model = RobertaModel.from_pretrained(
+            #     args.qformer.model_name_or_path, config=self.qformer_config,
+            # )
             
             self.query_token_embeds = nn.Parameter(
-                torch.zeros(self.num_query_tokens, self.qformer_config.hidden_size)
+                torch.zeros(self.num_query_tokens, self.t5_config.hidden_size)
             )
-            self.projector1 = nn.Linear(self.encoder.config.hidden_size,
-                                    out_features=self.qformer_config.hidden_size)
+            self.projector1 = nn.Linear(self.t5_config.hidden_size,
+                                    out_features=self.t5_config.hidden_size)
 
-            self.projector2 = nn.Linear(self.qformer_config.hidden_size, 4096)
+            self.projector2 = nn.Linear(self.t5_config.hidden_size, 4096)
         else:
             self.encoder = None
             self.model = None
             self.query_token_embeds = nn.Parameter(torch.zeros(self.num_query_tokens, 4096))
             self.projector1 = self.projector2 = None
             
-        # self.ln_norm1 = nn.LayerNorm(self.encoder_config.hidden_size,
-        #                              self.encoder_config.layer_norm_eps)
-        # self.ln_norm2 = nn.LayerNorm(4096, self.encoder_config.layer_norm_eps)
+        self.ln_norm1 = nn.LayerNorm(self.t5_config.hidden_size)
+        self.ln_norm2 = nn.LayerNorm(4096)
 
         self.init_weight()
 
@@ -223,7 +241,7 @@ class StructQformer(nn.Module):
 
         # print(res_embeds.norm(dim=-1))
         res_embeds = self.projector2(res_embeds)
-        # res_embeds = self.ln_norm2(res_embeds)
+        res_embeds = self.ln_norm2(res_embeds)
         # print(res_embeds.norm(dim=-1))
 
         return res_embeds
@@ -235,8 +253,9 @@ class StructQformer(nn.Module):
         if self.args.skip_encoder:
             res_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
         else:
-            graph_output = self.encoder(**encoder_inputs['encoder_inputs'])
-            encoder_hidden_states = self.projector1(graph_output.last_hidden_state)
+            encoder_inputs['encoder_inputs'].pop('labels')
+            encoder_output = self.uniskg.get_encoder_output(**encoder_inputs['encoder_inputs'])
+            encoder_hidden_states = encoder_output.last_hidden_state
 
             encoder_attention_mask = encoder_inputs['encoder_inputs']['attention_mask']
 
@@ -244,21 +263,19 @@ class StructQformer(nn.Module):
             # query_embeds = self.ln_norm1(query_embeds)
 
             query_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
-            query_atts = torch.ones(query_embeds.shape[:-1]).to(self.device)
+            query_atts = torch.ones(query_embeds.shape[:-1]).to(query_embeds.device)
 
-            question_output = self.model(
+            question_output = self.uniskg.get_query_output(
                 inputs_embeds=query_embeds,
                 attention_mask=query_atts,
                 encoder_hidden_states=encoder_hidden_states,
                 encoder_attention_mask=encoder_attention_mask,
-                # query_length=self.num_query_tokens,
-                # use_cache=False,
             )
-            res_embeds = question_output.last_hidden_state[:, -self.num_query_tokens:, :]
+            res_embeds = question_output.last_hidden_state
 
         # print(res_embeds.norm(dim=-1))
         res_embeds = self.projector2(res_embeds)
-        # res_embeds = self.ln_norm2(res_embeds)
+        res_embeds = self.ln_norm2(res_embeds)
         # print(res_embeds.norm(dim=-1))
 
         return res_embeds
@@ -383,7 +400,7 @@ class StructQformerLLM(nn.Module):
 
             all_param += num_params
             if param.requires_grad:
-                # print(name, param.shape, num_params)
+                print(name, param.shape, num_params)
                 trainable_params += num_params
 
         print(f"{trainable_params} / {all_param}, {trainable_params*100/all_param}%")

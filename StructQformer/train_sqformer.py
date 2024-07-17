@@ -182,7 +182,7 @@ if __name__ == "__main__":
             num_query_tokens=model_args.qformer.num_query_tokens,
         )
         eval_dataset = eval_dataset.select(random.sample(
-            range(len(eval_dataset)), k=min(10000, len(eval_dataset))))
+            range(len(eval_dataset)), k=min(100, len(eval_dataset))))
 
     if training_args.do_train or training_args.do_predict:
         test_dataset = build_instruction_dataset(
@@ -216,12 +216,7 @@ if __name__ == "__main__":
     trainer.add_callback(callback)
 
     if training_args.do_train:
-        if "debug" not in training_args.output_dir and list(
-            pathlib.Path(training_args.output_dir).glob("checkpoint-*")
-        ):
-            trainer.train(resume_from_checkpoint=True)
-        else:
-            trainer.train()
+        trainer.train()
 
     elif training_args.do_predict:
         trainer.data_collator = DataCollatorForGenerating(llm_tokenizer, encoder_tokenizer)

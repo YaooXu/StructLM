@@ -16,7 +16,7 @@ from transformers import (
     EarlyStoppingCallback,
 )
 from StructQformer.models import StructQformerLLM
-from StructQformer.SQformer_dataset_tabert import (
+from StructQformer.SQformer_dataset_hytrel import (
     DEFAULT_GRAPH_PAD_TOKEN,
     DataCollatorForGenerating,
     DataCollatorForGraphSupervisedDataset,
@@ -55,10 +55,10 @@ class ModelArguments:
     num_query_tokens: int = field(default=10)
     cross_attention_freq: int = field(default=1)
 
-    encoder_finetuning_type: str = field(default='freeze_plm')
+    encoder_finetuning_type: str = field(default="freeze_plm")
 
-    finetuning_type: str = field(default='freeze_backbone')
-    target_modules: str = field(default='q_proj,v_proj')
+    finetuning_type: str = field(default="freeze_backbone")
+    target_modules: str = field(default="q_proj,v_proj")
 
     strategy: str = field(default="pt")
 
@@ -66,7 +66,7 @@ class ModelArguments:
 
     ckpt_path: str = field(default=None)
 
-    attn_implementation: str = field(default='flash_attention_2')
+    attn_implementation: str = field(default="flash_attention_2")
 
 
 @dataclass
@@ -77,9 +77,7 @@ class WarppedTrainingArguments(TrainingArguments):
     max_desc_length: int = field(default=2048)
     max_seq_length: int = field(default=2560)
     preprocessing_num_workers: int = field(default=8)
-    data_cache_dir: Optional[str] = field(
-        default=None, metadata={"help": "The datasets processed stored"}
-    )
+    data_cache_dir: Optional[str] = field(default=None, metadata={"help": "The datasets processed stored"})
 
     cfg: str = field(default="qformer/v3.cfg")
 
@@ -103,20 +101,35 @@ class WarppedTrainingArguments(TrainingArguments):
     disable_tqdm: bool = False
 
 
+# to load state dict of hytrel
+@dataclass
+class OptimizerConfig:
+    batch_size: int = 256
+    base_learning_rate: float = 1e-3
+    weight_decay: float = 0.02
+    adam_beta1: float = 0.9
+    adam_beta2: float = 0.98
+    adam_epsilon: float = 1e-5
+    lr_scheduler_type: transformers.SchedulerType = "linear"
+    warmup_step_ratio: float = 0.1
+    seed: int = 42
+    optimizer: str = "Adam"
+    adam_w_mode: bool = True
+    save_every_n_epochs: int = 1
+    save_top_k: int = 1
+    checkpoint_path: str = ""
+
+
 if __name__ == "__main__":
     parser = transformers.HfArgumentParser((WarppedTrainingArguments))
-    training_args, = parser.parse_args_into_dataclasses()
+    (training_args,) = parser.parse_args_into_dataclasses()
 
     model_args = Configure.Get(training_args.cfg)
 
     training_args.run_name = training_args.cfg
 
     set_seed(training_args.seed)
-    torch_dtype = (
-        torch.float16
-        if training_args.fp16
-        else (torch.bfloat16 if training_args.bf16 else torch.float32)
-    )
+    torch_dtype = torch.float16 if training_args.fp16 else (torch.bfloat16 if training_args.bf16 else torch.float32)
 
     # Setup logging
     logging.basicConfig(
@@ -132,17 +145,29 @@ if __name__ == "__main__":
     log_level = training_args.get_process_log_level()
     logger.setLevel(log_level)
 
-    llm_tokenizer = AutoTokenizer.from_pretrained(
-        model_args.llm.model_name_or_path, use_fast=False)
+    llm_tokenizer = AutoTokenizer.from_pretrained(model_args.llm.model_name_or_path, use_fast=False)
 
-    encoder_tokenizer = AutoTokenizer.from_pretrained(
-        model_args.encoder.model_name_or_path, use_fast=False)
+    encoder_tokenizer = AutoTokenizer.from_pretrained(model_args.qformer.model_name_or_path, use_fast=False)
 
-    model = StructQformerLLM(model_args,
-                             llm_tokenizer,
-                             encoder_tokenizer,
-                             use_cache=False if training_args.gradient_checkpointing else True,
-                             torch_dtype=torch_dtype)
+    hypergraph_enc_config = AutoConfig.from_pretrained("google-bert/bert-base-uncased")
+    hypergraph_enc_config.update(
+        {
+            "vocab_size": len(encoder_tokenizer),
+            "pre_norm": False,
+            "activation_dropout": 0.1,
+            "gated_proj": False,
+            "llm_pad_token_id": llm_tokenizer.pad_token_id if llm_tokenizer.pad_token_id else llm_tokenizer.eos_token_id,
+        }
+    )
+
+    model = StructQformerLLM(
+        model_args,
+        hypergraph_enc_config,
+        llm_tokenizer,
+        encoder_tokenizer,
+        use_cache=False if training_args.gradient_checkpointing else True,
+        torch_dtype=torch_dtype,
+    )
 
     # for name, module in model.named_modules():
     #     if isinstance(module, LoraLayer):
@@ -182,8 +207,7 @@ if __name__ == "__main__":
             max_desc_length=training_args.max_desc_length,
             num_query_tokens=model_args.qformer.num_query_tokens,
         )
-        eval_dataset = eval_dataset.select(random.sample(
-            range(len(eval_dataset)), k=min(10000, len(eval_dataset))))
+        eval_dataset = eval_dataset.select(random.sample(range(len(eval_dataset)), k=min(10000, len(eval_dataset))))
 
     if training_args.do_train or training_args.do_predict:
         test_dataset = build_instruction_dataset(
@@ -222,7 +246,7 @@ if __name__ == "__main__":
 
     early_stopping_callback = EarlyStoppingCallback(early_stopping_patience=3)
     trainer.add_callback(early_stopping_callback)
-    
+
     if training_args.do_train:
         trainer.train()
 

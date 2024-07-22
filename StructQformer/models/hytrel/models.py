@@ -1,24 +1,73 @@
 import torch
 from .layers import *
+from transformers import AutoTokenizer
 
 
+
+# class Embedding(nn.Module):
+#   def __init__(self, config):
+#     super(Embedding, self).__init__()
+#     self.tok_embed = nn.Embedding(32001, config.hidden_size, padding_idx=config.pad_token_id)  # token embedding
+#     self.norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+#     self.dropout = nn.Dropout(config.hidden_dropout_prob)
+
+#   def forward(self, x_s, x_t):
+#     embedding_s, embedding_t = self.tok_embed(x_s), self.tok_embed(x_t)
+#     embedding_s, embedding_t = torch.div(torch.sum(embedding_s, dim=1), torch.count_nonzero(x_s, dim=1).unsqueeze(-1)), torch.div(torch.sum(embedding_t, dim=1), torch.count_nonzero(x_t, dim=1).unsqueeze(-1))
+#     return self.dropout(self.norm(embedding_s)), self.dropout(self.norm(embedding_t))
 
 
 class Embedding(nn.Module):
   def __init__(self, config):
     super(Embedding, self).__init__()
-    self.tok_embed = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=config.pad_token_id)  # token embedding
-    self.norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-    self.dropout = nn.Dropout(config.hidden_dropout_prob)
+    # self.tok_embed = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=config.pad_token_id)  # token embedding
+    # self.norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+    # self.dropout = nn.Dropout(config.hidden_dropout_prob)
+    self.proj = nn.Linear(4096, config.hidden_size)
+    self.llm_pad_token_id = config.llm_pad_token_id
+  
+  # @torch.no_grad
+  # def get_embeds(self, llm, input_ids, step=100):
+  #   llm.eval()
+  #   llm.disable_adapter_layers()
+    
+  #   attention_mask = torch.ne(input_ids, self.llm_pad_token_id).to(input_ids.device)
+  #   num_nodes = input_ids.shape[0]
+    
+  #   all_embeddings = []
+  #   for i in range(0, num_nodes, step)
+  #     embeddings = llm(input_ids, attention_mask=attention_mask, output_hidden_states=True)['hidden_states'][-1]
+      
+  #   llm.enable_adapter_layers()
+  #   llm.train()
+  def forward(self, llm, x_s, x_t):
+    # llm.disable_adapter_layers()
+    
+    # is_train = False
+    # if llm.training:
+    #   llm.eval()
+    #   is_train = True
+      
+    # with torch.no_grad():
+      
+    #   input_ids = x_s
+    #   attention_mask = torch.ne(input_ids, self.llm_pad_token_id).to(input_ids.device)
+    #   embedding_s = llm(input_ids, attention_mask=attention_mask, output_hidden_states=True)['hidden_states'][-1]
+    #   embedding_s = torch.sum(embedding_s * attention_mask.unsqueeze(-1), 1) / attention_mask.sum(dim=-1, keepdim=True)
 
-  def forward(self, x_s, x_t):
-    embedding_s, embedding_t = self.tok_embed(x_s), self.tok_embed(x_t)
-    embedding_s, embedding_t = torch.div(torch.sum(embedding_s, dim=1), torch.count_nonzero(x_s, dim=1).unsqueeze(-1)), torch.div(torch.sum(embedding_t, dim=1), torch.count_nonzero(x_t, dim=1).unsqueeze(-1))
-    return self.dropout(self.norm(embedding_s)), self.dropout(self.norm(embedding_t))
-
-
-
-
+    #   input_ids = x_t
+    #   attention_mask = torch.ne(input_ids, self.llm_pad_token_id).to(input_ids.device)
+    #   embedding_t = llm(input_ids, attention_mask=attention_mask, output_hidden_states=True)['hidden_states'][-1]
+    #   embedding_t = torch.sum(embedding_t * attention_mask.unsqueeze(-1), 1) / attention_mask.sum(dim=-1, keepdim=True)
+      
+    # llm.enable_adapter_layers()
+    # if is_train:
+    #   llm.train()
+    x_s = x_s.to(self.proj.weight.dtype)
+    x_t = x_t.to(self.proj.weight.dtype)
+      
+    return self.proj(x_s), self.proj(x_t)
+  
 class EncoderLayer(nn.Module):
   """SetTransformer Encoder Layer"""
   def __init__(self, config):
@@ -54,8 +103,8 @@ class Encoder(nn.Module):
     self.embed_layer = Embedding(config)
     self.layer = nn.ModuleList([EncoderLayer(config) for _ in range(config.num_hidden_layers)])
 
-  def forward(self, data):
-    embedding_s, embedding_t = self.embed_layer(data.x_s, data.x_t)
+  def forward(self, data, llm):
+    embedding_s, embedding_t = self.embed_layer(llm, data.x_s, data.x_t)
     embedding_t = torch.cat([embedding_t, embedding_s], dim=0)
 
     # Add self-loop
@@ -70,7 +119,7 @@ class Encoder(nn.Module):
 
 
     for i, layer_module in enumerate(self.layer):
-      embedding_s, embedding_t  = layer_module(embedding_s, embedding_t, edge_index)
+      embedding_s, embedding_t = layer_module(embedding_s, embedding_t, edge_index)
     outputs = (embedding_s, embedding_t[:num_hyper_edges])
 
     return outputs

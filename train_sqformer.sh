@@ -32,6 +32,7 @@ wandb online
     # --gradient_checkpointing \
 
 dataset_dir=data/uniskg/wikitq
+dataset_dir=data/hytrel/wikitq
 roberta_size=large
 ft_type=lora
 
@@ -43,7 +44,7 @@ llm=llama
 
 gas=1
 
-for t5_size in base ; do
+for size in base large ; do
 
     for t5_ft_type in freeze_enc_full_dec ; do
 
@@ -51,7 +52,7 @@ for t5_size in base ; do
 
         # cfg=v3.2-roberta_${roberta_size}-${t5_ft_type}_T5_${t5_size}-${ft_type}_${llm}-10.cfg
         # cfg=t5_qformer/v3.3-${t5_ft_type}_trained_T5_${t5_size}-lora_${llm}-10.cfg
-        cfg=t5_qformer/v3.3-${t5_ft_type}_${t5_model_type}_T5_large-lora_llama-10.cfg
+        cfg=hytrel/v2-bert_${size}-lora_llama-10.cfg
 
         echo ${cfg}
 
@@ -69,7 +70,7 @@ for t5_size in base ; do
             --max_seq_length=${max_seq_length} \
             --dataset_dir=${dataset_dir} \
             --overwrite_output_dir \
-            --output_dir=/mnt/userdata/StructLM/outputs/${dataset_dir}/enc_wo_q_42${gas}_${cfg} \
+            --output_dir=/mnt/userdata/StructLM/outputs/${dataset_dir}/${cfg} \
             --seed=0 \
             --num_train_epochs=${num_train_epochs} \
             --per_device_train_batch_size=2 \

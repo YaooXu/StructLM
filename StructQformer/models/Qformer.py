@@ -72,13 +72,11 @@ class BertEmbeddings(nn.Module):
             config, "position_embedding_type", "absolute"
         )
 
-        self.config = config
-
     def forward(
         self,
         input_ids=None,
         position_ids=None,
-        input_embeds=None,
+        inputs_embeds=None,
         past_key_values_length=0,
     ):
         if input_ids is not None:
@@ -97,15 +95,14 @@ class BertEmbeddings(nn.Module):
                 position_embeddings = self.position_embeddings(position_ids)
                 embeddings = embeddings + position_embeddings
 
-            if input_embeds is not None:
-                embeddings = torch.cat((input_embeds, embeddings), dim=1)
+            if inputs_embeds is not None:
+                embeddings = torch.cat((inputs_embeds, embeddings), dim=1)
         else:
-            embeddings = input_embeds
+            embeddings = inputs_embeds
 
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings
-
 
 class BertSelfAttention(nn.Module):
     def __init__(self, config, is_cross_attention):
@@ -453,16 +450,16 @@ class BertLayer(nn.Module):
                 self.feed_forward_chunk_query,
                 self.chunk_size_feed_forward,
                 self.seq_len_dim,
-                attention_output[:, -query_length:, :],
+                attention_output[:, :query_length, :],
             )
             if attention_output.shape[1] > query_length:
                 layer_output_text = apply_chunking_to_forward(
                     self.feed_forward_chunk,
                     self.chunk_size_feed_forward,
                     self.seq_len_dim,
-                    attention_output[:, :-query_length, :],
+                    attention_output[:, query_length:, :],
                 )
-                layer_output = torch.cat([layer_output_text, layer_output], dim=1)
+                layer_output = torch.cat([layer_output, layer_output_text], dim=1)
         else:
             layer_output = apply_chunking_to_forward(
                 self.feed_forward_chunk,
@@ -811,7 +808,7 @@ class BertModel(BertPreTrainedModel):
     def forward(
         self,
         input_ids=None,
-        input_embeds=None,
+        inputs_embeds=None,
         attention_mask=None,
         position_ids=None,
         head_mask=None,
@@ -874,16 +871,16 @@ class BertModel(BertPreTrainedModel):
         )
 
         # query_length = query_embeds.shape[1] if query_embeds is not None else 0
-        # query_length = input_ids.shape[1] if input_ids is not None else input_embeds.shape[1]
+        # query_length = input_ids.shape[1] if input_ids is not None else inputs_embeds.shape[1]
         # query_length = 0
         
-        if input_embeds is not None:
-            embedding_output = input_embeds
+        if inputs_embeds is not None:
+            embedding_output = inputs_embeds
         else:
             embedding_output = self.embeddings(
                 input_ids=input_ids,
                 position_ids=position_ids,
-                input_embeds=query_embeds,
+                inputs_embeds=query_embeds,
                 past_key_values_length=past_key_values_length,
             )
 
@@ -1003,7 +1000,7 @@ class BertLMHeadModel(BertPreTrainedModel):
     def forward(
         self,
         input_ids=None,
-        input_embeds=None,
+        inputs_embeds=None,
         attention_mask=None,
         position_ids=None,
         head_mask=None,
@@ -1062,7 +1059,7 @@ class BertLMHeadModel(BertPreTrainedModel):
 
         outputs = self.bert(
             input_ids,
-            input_embeds=input_embeds,
+            inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
             position_ids=position_ids,
             head_mask=head_mask,

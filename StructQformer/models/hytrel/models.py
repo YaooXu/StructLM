@@ -23,7 +23,7 @@ class Embedding(nn.Module):
     # self.tok_embed = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=config.pad_token_id)  # token embedding
     # self.norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
     # self.dropout = nn.Dropout(config.hidden_dropout_prob)
-    self.proj = nn.Linear(4096, config.hidden_size)
+    self.proj = nn.Linear(1024, config.hidden_size)
     self.llm_pad_token_id = config.llm_pad_token_id
   
   # @torch.no_grad

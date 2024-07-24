@@ -17,7 +17,6 @@ from transformers import (
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 
 # from StructQformer.models.base_models.modeling_llama import LlamaForCausalLM
-from StructQformer.models.base_models.modeling_roberta import RobertaEncoder, RobertaModel
 from StructQformer.models.base_models.modeling_t5_qformer import T5ForConditionalGeneration
 from StructQformer.models.graphormer.graphormer import Graphormer
 
@@ -26,7 +25,8 @@ from utils.configure import Configure
 
 # from model.encoder_geo import GraphEncoder
 
-from .Qformer import BertConfig, BertLMHeadModel, BertModel
+from .Qformer_bert import BertConfig, BertLMHeadModel, BertModel
+from .Qformer_roberta import  RobertaModel
 
 import torch.nn as nn
 
@@ -101,14 +101,13 @@ class StructQformer(nn.Module):
             self.encoder_config.cross_attention_freq = 1
             self.encoder_config.query_length = self.num_query_tokens
 
-            self.model = BertLMHeadModel.from_pretrained(args.qformer.model_name_or_path, config=self.encoder_config)
-            # # for roberta
-            # self.encoder_config.add_cross_attention = True
-            # self.encoder_config.is_decoder = True
-            # self.encoder_config.use_dist_bias = False
-            # self.model = RobertaModel.from_pretrained(
-            #     args.qformer.model_name_or_path, config=self.encoder_config,
-            # )
+            # self.model = BertLMHeadModel.from_pretrained(args.qformer.model_name_or_path, config=self.encoder_config)
+            # for roberta
+            self.encoder_config.add_cross_attention = True
+            self.encoder_config.is_decoder = True
+            self.model = RobertaModel.from_pretrained(
+                args.qformer.model_name_or_path, config=self.encoder_config,
+            )
             
             self.query_token_embeds = nn.Parameter(torch.zeros(self.num_query_tokens, self.encoder_config.hidden_size))
             self.projector1 = nn.Linear(self.hypergraph_encoder.config.hidden_size, self.encoder_config.hidden_size)
@@ -241,18 +240,15 @@ class StructQformer(nn.Module):
 
             graph_embeds = self.projector1(graph_embeds)
 
-            question_embeds = self.model.bert.embeddings(question_ids)
+            question_embeds = self.model.embeddings(question_ids)
             query_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
-            
-            # # add ln, dp
-            # query_embeds = self.model.bert.embeddings(inputs_embeds=query_embeds)
             
             inputs_embeds = torch.cat([query_embeds, question_embeds], dim=1)
 
             query_atts = torch.ones(query_embeds.shape[:-1]).to(inputs_embeds.device)
             attention_mask = torch.cat([query_atts, question_attention_mask], dim=1)
 
-            question_output = self.model.bert(
+            question_output = self.model(
                 inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
                 encoder_hidden_states=graph_embeds,
@@ -381,7 +377,7 @@ class StructQformerLLM(nn.Module):
                 )
                 self.llm = get_peft_model(self.llm, peft_config)
                 self.llm.print_trainable_parameters()
-        elif args.llm.finetuning_type == "freeze_backbone":
+        elif args.llm.finetuning_type == "freeze":
             for name, param in self.llm.named_parameters():
                 param.requires_grad = False
         else:

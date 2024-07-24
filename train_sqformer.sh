@@ -44,7 +44,7 @@ llm=llama
 
 gas=1
 
-for size in base large ; do
+for size in base ; do
 
     for t5_ft_type in freeze_enc_full_dec ; do
 
@@ -52,7 +52,9 @@ for size in base large ; do
 
         # cfg=v3.2-roberta_${roberta_size}-${t5_ft_type}_T5_${t5_size}-${ft_type}_${llm}-10.cfg
         # cfg=t5_qformer/v3.3-${t5_ft_type}_trained_T5_${t5_size}-lora_${llm}-10.cfg
-        cfg=hytrel/v2-bert_${size}-lora_llama-10.cfg
+        cfg=hytrel/v2-pretrain-bert_base-freeze_llama.cfg
+        num_train_epochs=3
+        gas=8
 
         echo ${cfg}
 
@@ -73,7 +75,7 @@ for size in base large ; do
             --output_dir=/mnt/userdata/StructLM/outputs/${dataset_dir}/${cfg} \
             --seed=0 \
             --num_train_epochs=${num_train_epochs} \
-            --per_device_train_batch_size=2 \
+            --per_device_train_batch_size=4 \
             --gradient_accumulation_steps=${gas} \
             --per_device_eval_batch_size=8 \
             --save_strategy=epoch \

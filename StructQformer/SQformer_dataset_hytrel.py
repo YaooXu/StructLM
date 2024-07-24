@@ -292,7 +292,7 @@ class GraphDataset(Dataset):
             "input_ids": input_ids,
             "labels": labels,
             "question_ids": question_ids,
-            "graph": torch.load(sample['graph_path']),
+            "graph": torch.load(sample['graph_path'].replace('.pretraining', '')),
         }
         return item
 

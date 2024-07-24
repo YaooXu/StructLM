@@ -21,10 +21,12 @@ from utils.utils import df_to_jsonl, load_json, write_jsonl
 from collections import defaultdict, deque
 from torch_geometric.data import Data
 from easydict import EasyDict
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModel
 from multiprocessing import Pool
 from datasets import load_dataset
 from torch.multiprocessing import Pool, Process, set_start_method
+import torch.nn.functional as F
+
 
 # constants
 CAP_TAG = "<caption>"
@@ -245,10 +247,8 @@ def obtain_samples(process_idx, idxes_to_process):
         sample["idx"] = idx
 
         if "test" in path:
-            struct_data_key = "table" if "table" in sample else "kg_tuples"
-
             question = sample["question"] if "question" in sample else sample["statement"]
-            struct_data = sample[struct_data_key]
+            struct_data = sample["table"]
             sample["label"] = sample["seq_out"]
             sample["input"] = sample["formatted_input"]
 
@@ -274,7 +274,6 @@ def obtain_samples(process_idx, idxes_to_process):
             #     sample['formatted_input'] = new_formatted_input
         else:
             train_data = train_dataset[idx]
-            struct_data_key = "table" if "table" in train_data else "kg_tuples"
 
             question = sample["input"].split("\n\n")[-1]
             assert (
@@ -282,7 +281,7 @@ def obtain_samples(process_idx, idxes_to_process):
                 == (train_data["question"] if "question" in train_data else train_data["statement"]).lower().strip()
             )
 
-            struct_data = train_data[struct_data_key]
+            struct_data = train_data["table"]
 
             # table = re.findall(r"table:\n\n([\s\S]*)\n\n\n", sample["input"])[0]
             sys_prompt = "Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.\n\n### Instruction:\n\n\n"
@@ -292,28 +291,30 @@ def obtain_samples(process_idx, idxes_to_process):
         # print(question)
         # print(sample['label'])
 
-        graph = converter._text2graph(struct_data, True)
-        if graph:
-            sample["graph"] = graph
+        try:
+            graph = converter._text2graph(struct_data, True)
+            if graph:
+                sample["graph"] = graph
 
-            if not pretraining:
-                # ft
-                sample["question"] = question
-                new_samples.append(sample)
+                if not pretraining:
+                    # ft
+                    sample["question"] = question
+                    new_samples.append(sample)
 
-                if "test" in path:
-                    tasks_to_n[sample["description"]] += 1
+                    if "test" in path:
+                        tasks_to_n[sample["description"]] += 1
+                    else:
+                        tasks_to_n[sample["task_name"]] += 1
                 else:
-                    tasks_to_n[sample["task_name"]] += 1
-            else:
-                # construct self-supervised data
-                qa_pairs = construct_pretraining_questions(struct_data)
-                for qa_pair in qa_pairs:
-                    new_sample = deepcopy(sample)
-                    new_sample["question"] = qa_pair[0]
-                    new_sample["label"] = qa_pair[1]
-                    new_samples.append(new_sample)
-        else:
+                    # construct self-supervised data
+                    qa_pairs = construct_pretraining_questions(struct_data)
+                    for qa_pair in qa_pairs:
+                        new_sample = deepcopy(sample)
+                        new_sample["question"] = qa_pair[0]
+                        new_sample["label"] = qa_pair[1]
+                        new_samples.append(new_sample)
+        except Exception as e:
+            print(e)
             continue
 
     return new_samples
@@ -336,7 +337,7 @@ def sample_ignoring_element(lst, ignore_element):
     return sampled_element
 
 
-def construct_pretraining_questions(table, k=50):
+def construct_pretraining_questions(table, k=10):
     # table: headers : [], rows: [[...], [...], ]
     num_rows = len(table["rows"])
     num_cols = len(table["header"])
@@ -400,43 +401,65 @@ def construct_pretraining_questions(table, k=50):
     return all_qa_pairs
 
 
+# Mean Pooling - Take attention mask into account for correct averaging
+def mean_pooling(model_output, attention_mask):
+    token_embeddings = model_output[0]  # First element of model_output contains all token embeddings
+    input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+    return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+
+
+def get_sentence_embeds(model, tokenizer, input_ids):
+
+    input_ids = torch.LongTensor(input_ids).to(model.device)
+    attention_mask = torch.ne(input_ids, tokenizer.pad_token_id).to(input_ids.device)
+
+    # Compute token embeddings
+    with torch.no_grad():
+        model_output = model(input_ids, attention_mask=attention_mask)
+
+    # Perform pooling
+    sentence_embeddings = mean_pooling(model_output, attention_mask)
+
+    # Normalize embeddings
+    sentence_embeddings = F.normalize(sentence_embeddings, p=2, dim=1)
+
+    return sentence_embeddings
+
+
 if __name__ == "__main__":
 
-    output_dir = "wikitq"
-    n_process = 10
+    n_process = 32
     shuffle = False
-    pretraining = True
-    output_dir = f"data/hytrel.pretraining/{output_dir}"
-    os.makedirs(output_dir, exist_ok=True)
-    os.makedirs(output_dir + "/train", exist_ok=True)
-    os.makedirs(output_dir + "/test", exist_ok=True)
+    pretraining = False
+    output_dir = f"data/hytrel/"
+    cache_dir = f"/mnt/userdata/StructLM/data/hytrel/cache"
 
-    # path = "data/processed/skginstruct_skgonly.json"
-    # tab_tasks = ['tab_fact', 'wikitq', 'wikisql', 'tabmwp', 'fetaqa']
-    # tab_tasks = ['wikitq']
+    model_path = "sentence-transformers/all-roberta-large-v1"
+    llm = AutoModel.from_pretrained(
+        model_path,
+        # max_memory={0: "78GiB", 1: "78GiB"},
+        device_map="auto",
+    )
+    llm.eval()
 
-    # llm = AutoModelForCausalLM.from_pretrained(
-    #     "meta-llama/Llama-2-7b-hf",
-    #     torch_dtype=torch.bfloat16,
-    #     # max_memory={0: "78GiB", 1: "78GiB"},
-    #     device_map="auto",
-    # )
-    # llm.eval()
-
-    tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf", device_map="auto")
+    tokenizer = AutoTokenizer.from_pretrained(model_path, device_map="auto")
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
     converter = TableConverter(tokenizer)
-
-    # for path, tab_tasks in zip(["data/processed/skginstruct_skgonly.json", "data/processed/skginstruct_test_file_mistral.json"],
-    #                            [['fetaqa', 'hybridqa', 'wikitq', 'tabmwp', 'wikisql', 'tab_fact', 'feverous'], ['task: wiki table question']]):
-    for path, tab_tasks in zip(
-        ["data/processed/skginstruct_skgonly.json", "data/processed/skginstruct_test_file_mistral.json"],
-        [["wikitq"], ["task: wiki table question"]],
+    dataset_name = None
+    for path, tab_tasks in (
+        (
+            "data/processed/skginstruct_skgonly.json",
+            ["wikitq"],
+            # ["fetaqa", "hybridqa", "wikitq", "tabmwp", "wikisql", "tab_fact", "feverous"],
+        ),
+        (
+            "data/processed/skginstruct_test_file_mistral.json",
+            ["task: wiki table question"],
+            # ["task: tabfact", "task: wiki table question", "task: wikisql"],
+        ),
     ):
-        # for path, tab_tasks in zip(["data/processed/skginstruct_test_file_mistral.json"],
-        #                             [['task: wiki table question']]):
         all_samples = load_json(path=path)
 
         tasks_to_samples = defaultdict(list)
@@ -454,11 +477,14 @@ if __name__ == "__main__":
 
             if "test" not in path:
                 train_dataset = load_dataset(f"tasks/{task}.py")["train"]
+
+                print(dataset_name, output_dir)
                 assert len(train_dataset) == len(samples)
             else:
                 train_dataset = None
 
             num_samples = len(samples)
+            # num_samples = 10
             print(task, num_samples)
 
             with Pool(processes=n_process) as pool:
@@ -478,37 +504,34 @@ if __name__ == "__main__":
                 task_samples.extend(samples)
             print(len(task_samples))
 
+            with torch.no_grad():
+                for i, sample in tqdm(enumerate(task_samples)):
+                    # replace graph with graph path
+                    graph = sample.pop("graph")
+
+                    split = "test" if "test" in path else "train"
+                    graph_path = f"{cache_dir}/{task}/{sample['idx']}.pt"
+                    sample["graph_path"] = graph_path
+                    if os.path.exists(graph_path):
+                        continue
+                    else:
+                        os.makedirs(os.path.dirname(graph_path), exist_ok=True)
+
+                        embedding_s = get_sentence_embeds(llm, tokenizer, graph["x_s"])
+                        graph["x_s"] = list(embedding_s.cpu().float().numpy())
+                        del embedding_s
+
+                        embedding_t = get_sentence_embeds(llm, tokenizer, graph["x_t"])
+                        graph["x_t"] = list(embedding_t.cpu().float().numpy())
+                        del embedding_t
+
+                        torch.save(graph, graph_path)
+
             all_samples.extend(task_samples)
 
         print(len(all_samples))
-        with torch.no_grad():
-            for i, sample in tqdm(enumerate(all_samples)):
-                # replace graph with graph path
-                graph = sample.pop("graph")
-                name = "test" if "test" in path else "train"
-                graph_path = f"{output_dir}/{name}/{sample['idx']}.pt"
-                sample["graph_path"] = graph_path
 
-                # input_ids = torch.LongTensor(graph["x_s"]).to(llm.device)
-                # attention_mask = torch.ne(input_ids, tokenizer.pad_token_id).to(input_ids.device)
-                # embedding_s = llm(input_ids, attention_mask=attention_mask, output_hidden_states=True)["hidden_states"][-1]
-                # embedding_s = torch.sum(embedding_s * attention_mask.unsqueeze(-1), 1) / attention_mask.sum(
-                #     dim=-1, keepdim=True
-                # )
-                # graph["x_s"] = list(embedding_s.cpu().float().numpy())
-                # del embedding_s
-
-                # input_ids = torch.LongTensor(graph["x_t"]).to(llm.device)
-                # attention_mask = torch.ne(input_ids, tokenizer.pad_token_id).to(input_ids.device)
-                # embedding_t = llm(input_ids, attention_mask=attention_mask, output_hidden_states=True)["hidden_states"][-1]
-                # embedding_t = torch.sum(embedding_t * attention_mask.unsqueeze(-1), 1) / attention_mask.sum(
-                #     dim=-1, keepdim=True
-                # )
-                # graph["x_t"] = list(embedding_t.cpu().float().numpy())
-                # del embedding_t
-
-                # torch.save(graph, graph_path)
-
+        os.makedirs(output_dir, exist_ok=True)
         if "test" in path:
             # if len(tab_tasks) > 1:
             #     random.shuffle(new_samples)

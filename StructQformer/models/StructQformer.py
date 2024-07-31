@@ -94,7 +94,9 @@ class StructQformer(nn.Module):
         if self.strategy[:2] == "v2":
             self.hypergraph_encoder = HyperGraphEncoder(hypergraph_enc_config)
             self.encoder = self.hypergraph_encoder
-
+            if self.args.qformer.freeze_encoder:
+                self.hypergraph_encoder.requires_grad_(False)
+            
             self.encoder_config = AutoConfig.from_pretrained(args.qformer.model_name_or_path)
             self.encoder_config.encoder_width = self.encoder_config.hidden_size
             self.encoder_config.add_cross_attention = True
@@ -108,6 +110,18 @@ class StructQformer(nn.Module):
             self.model = RobertaModel.from_pretrained(
                 args.qformer.model_name_or_path, config=self.encoder_config,
             )
+            if self.args.qformer.model_finetuning_type == 'full':
+                self.model.requires_grad_(True)
+            elif self.args.qformer.model_finetuning_type == 'lora':
+                peft_config = LoraConfig(
+                    task_type=TaskType.CAUSAL_LM,
+                    inference_mode=False,
+                    target_modules=args.qformer.target_modules.split(","),
+                    r=args.qformer.r,
+                    lora_alpha=args.qformer.lora_alpha,
+                    lora_dropout=args.qformer.lora_dropout,
+                )
+                self.model = get_peft_model(self.model, peft_config)                
             
             self.query_token_embeds = nn.Parameter(torch.zeros(self.num_query_tokens, self.encoder_config.hidden_size))
             self.projector1 = nn.Linear(self.hypergraph_encoder.config.hidden_size, self.encoder_config.hidden_size)

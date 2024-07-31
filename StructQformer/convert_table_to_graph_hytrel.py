@@ -117,7 +117,7 @@ class TableConverter:
                 table["header"], table["rows"] = table["header"][0], table["rows"][0]
             cap = ""
             headers, data = table["header"], table["rows"]
-
+            
         cap = " ".join(cap.split()[: self.data_args.max_token_length])  # filter too long caption
         header = [" ".join(h.split()[: self.data_args.max_token_length]) for h in headers][: self.data_args.max_column_length]
         data = [row[: self.data_args.max_column_length] for row in data[: self.data_args.max_row_length]]
@@ -311,12 +311,12 @@ def obtain_samples(process_idx, idxes_to_process):
                     for qa_pair in qa_pairs:
                         new_sample = deepcopy(sample)
                         new_sample["question"] = qa_pair[0]
-                        new_sample["label"] = qa_pair[1]
+                        new_sample["label"] = new_sample["seq_out"] = qa_pair[1]
                         new_samples.append(new_sample)
         except Exception as e:
             print(e)
             continue
-
+    print(process_idx, len(new_samples))
     return new_samples
 
 
@@ -337,7 +337,7 @@ def sample_ignoring_element(lst, ignore_element):
     return sampled_element
 
 
-def construct_pretraining_questions(table, k=10):
+def construct_pretraining_questions(table, k=20):
     # table: headers : [], rows: [[...], [...], ]
     num_rows = len(table["rows"])
     num_cols = len(table["header"])
@@ -428,10 +428,10 @@ def get_sentence_embeds(model, tokenizer, input_ids):
 
 if __name__ == "__main__":
 
-    n_process = 32
+    n_process = 16
     shuffle = False
-    pretraining = False
-    output_dir = f"data/hytrel/"
+    pretraining = True
+    output_dir = f"/mnt/userdata/StructLM/data/hytrel/pretraining"
     cache_dir = f"/mnt/userdata/StructLM/data/hytrel/cache"
 
     model_path = "sentence-transformers/all-roberta-large-v1"
@@ -447,12 +447,11 @@ if __name__ == "__main__":
         tokenizer.pad_token = tokenizer.eos_token
 
     converter = TableConverter(tokenizer)
-    dataset_name = None
     for path, tab_tasks in (
         (
             "data/processed/skginstruct_skgonly.json",
-            ["wikitq"],
-            # ["fetaqa", "hybridqa", "wikitq", "tabmwp", "wikisql", "tab_fact", "feverous"],
+            ["tab_fact"],
+            # ["fetaqa", "hybridqa", "wikitq", "tabmwp", "wikisql", "tab_fact"],
         ),
         (
             "data/processed/skginstruct_test_file_mistral.json",
@@ -477,8 +476,6 @@ if __name__ == "__main__":
 
             if "test" not in path:
                 train_dataset = load_dataset(f"tasks/{task}.py")["train"]
-
-                print(dataset_name, output_dir)
                 assert len(train_dataset) == len(samples)
             else:
                 train_dataset = None
@@ -486,6 +483,8 @@ if __name__ == "__main__":
             num_samples = len(samples)
             # num_samples = 10
             print(task, num_samples)
+            
+            # results = obtain_samples(0, range(22_222, num_samples))
 
             with Pool(processes=n_process) as pool:
                 num_samples_in_chunk = num_samples // n_process + 1
@@ -510,7 +509,7 @@ if __name__ == "__main__":
                     graph = sample.pop("graph")
 
                     split = "test" if "test" in path else "train"
-                    graph_path = f"{cache_dir}/{task}/{sample['idx']}.pt"
+                    graph_path = f"{cache_dir}/{task}/{sample['idx']}.pickle"
                     sample["graph_path"] = graph_path
                     if os.path.exists(graph_path):
                         continue

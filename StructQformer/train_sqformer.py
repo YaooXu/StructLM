@@ -207,7 +207,7 @@ if __name__ == "__main__":
             max_desc_length=training_args.max_desc_length,
             num_query_tokens=model_args.qformer.num_query_tokens,
         )
-        eval_dataset = eval_dataset.select(random.sample(range(len(eval_dataset)), k=min(10000, len(eval_dataset))))
+        eval_dataset = eval_dataset.select(random.sample(range(len(eval_dataset)), k=min(1000, len(eval_dataset))))
 
     if training_args.do_train or training_args.do_predict:
         test_dataset = build_instruction_dataset(
@@ -220,6 +220,8 @@ if __name__ == "__main__":
             training=False,
         )
         test_examples = load_jsonl(dataset_dir / f"ori_test.jsonl")
+        if 'pretraining' in str(dataset_dir):
+            test_dataset = test_dataset.select(random.sample(range(len(eval_dataset)), k=min(100, len(eval_dataset))))
 
     if "debug" in training_args.output_dir:
         test_dataset = test_dataset.select(range(10))
@@ -244,8 +246,10 @@ if __name__ == "__main__":
     #     trainer, llm_tokenizer, encoder_tokenizer, test_dataset, test_examples)
     # trainer.add_callback(callback)
 
-    early_stopping_callback = EarlyStoppingCallback(early_stopping_patience=3)
-    trainer.add_callback(early_stopping_callback)
+    if 'pretraining' not in str(dataset_dir): 
+        # do not early stop in pretraining
+        early_stopping_callback = EarlyStoppingCallback(early_stopping_patience=3)
+        trainer.add_callback(early_stopping_callback)
 
     if training_args.do_train:
         trainer.train()

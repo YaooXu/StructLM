@@ -52,9 +52,7 @@ for size in base ; do
 
         # cfg=v3.2-roberta_${roberta_size}-${t5_ft_type}_T5_${t5_size}-${ft_type}_${llm}-10.cfg
         # cfg=t5_qformer/v3.3-${t5_ft_type}_trained_T5_${t5_size}-lora_${llm}-10.cfg
-        cfg=hytrel/v2-pretrain-bert_base-freeze_llama.cfg
-        num_train_epochs=3
-        gas=8
+        cfg=hytrel/v2-trained_roberta_base-lora_llama-10.cfg
 
         echo ${cfg}
 

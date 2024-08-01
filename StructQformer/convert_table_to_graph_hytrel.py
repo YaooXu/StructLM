@@ -42,8 +42,8 @@ class BipartiteData(Data):
     def __init__(self, edge_index=None, x_s=None, x_t=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.edge_index = torch.LongTensor(edge_index) if edge_index else None  # [2, N]
-        self.x_s = torch.Tensor(np.array(x_s)) if edge_index else None
-        self.x_t = torch.Tensor(np.array(x_t)) if edge_index else None
+        self.x_s = torch.Tensor(x_s) if edge_index else None
+        self.x_t = torch.Tensor(x_t) if edge_index else None
 
     def __inc__(self, key, value, *args, **kwargs):
         if key in ["edge_index", "corr_edge_index", "edge_index_corr1", "edge_index_corr2"]:
@@ -428,9 +428,9 @@ def get_sentence_embeds(model, tokenizer, input_ids):
 
 if __name__ == "__main__":
 
-    n_process = 16
+    n_process = 32
     shuffle = False
-    pretraining = True
+    pretraining = False
     output_dir = f"/mnt/userdata/StructLM/data/hytrel/pretraining"
     cache_dir = f"/mnt/userdata/StructLM/data/hytrel/cache"
 
@@ -450,8 +450,8 @@ if __name__ == "__main__":
     for path, tab_tasks in (
         (
             "data/processed/skginstruct_skgonly.json",
-            ["tab_fact"],
-            # ["fetaqa", "hybridqa", "wikitq", "tabmwp", "wikisql", "tab_fact"],
+            # ["tab_fact"],
+            ["fetaqa", "hybridqa", "wikitq", "tabmwp", "wikisql", "tab_fact"],
         ),
         (
             "data/processed/skginstruct_test_file_mistral.json",
@@ -484,8 +484,9 @@ if __name__ == "__main__":
             # num_samples = 10
             print(task, num_samples)
             
-            # results = obtain_samples(0, range(22_222, num_samples))
-
+            # results = obtain_samples(0, range(85035, num_samples))
+            # task_samples = results
+            
             with Pool(processes=n_process) as pool:
                 num_samples_in_chunk = num_samples // n_process + 1
                 jobs = []
@@ -509,22 +510,27 @@ if __name__ == "__main__":
                     graph = sample.pop("graph")
 
                     split = "test" if "test" in path else "train"
-                    graph_path = f"{cache_dir}/{task}/{sample['idx']}.pickle"
+                    graph_path = f"{cache_dir}/{task}/{sample['idx']}.pkl"
                     sample["graph_path"] = graph_path
                     if os.path.exists(graph_path):
+                        try:
+                            with open(graph_path, 'rb') as f:
+                                pickle.load(f)
+                        except Exception as e:
+                            print(e)
+                            
                         continue
                     else:
                         os.makedirs(os.path.dirname(graph_path), exist_ok=True)
 
                         embedding_s = get_sentence_embeds(llm, tokenizer, graph["x_s"])
-                        graph["x_s"] = list(embedding_s.cpu().float().numpy())
-                        del embedding_s
+                        graph["x_s"] = embedding_s.detach().cpu().float().numpy()
 
                         embedding_t = get_sentence_embeds(llm, tokenizer, graph["x_t"])
-                        graph["x_t"] = list(embedding_t.cpu().float().numpy())
-                        del embedding_t
+                        graph["x_t"] = embedding_t.detach().cpu().float().numpy()
 
-                        torch.save(graph, graph_path)
+                        with open(graph_path, 'wb') as f:
+                            pickle.dump(graph, f)
 
             all_samples.extend(task_samples)
 

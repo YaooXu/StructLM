@@ -288,11 +288,20 @@ class GraphDataset(Dataset):
             labels = torch.LongTensor([IGNORE_INDEX] * len(s))[:max_seq_length]
         question_ids = torch.LongTensor(q)
 
+        # try:
+        #     graph = torch.load(sample['graph_path'])
+        # except Exception as e:
+        #     graph = None
+        #     print(sample['graph_path'])
+        
+        with open(sample['graph_path'], 'rb') as f:
+            graph = pickle.load(f)
+            
         item = {
             "input_ids": input_ids,
             "labels": labels,
             "question_ids": question_ids,
-            "graph": torch.load(sample['graph_path']),
+            "graph": graph,
         }
         return item
 

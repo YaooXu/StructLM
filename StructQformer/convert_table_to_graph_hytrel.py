@@ -2,6 +2,7 @@ from copy import deepcopy
 import random
 import sys
 import time
+import zipfile
 
 import numpy as np
 
@@ -117,7 +118,7 @@ class TableConverter:
                 table["header"], table["rows"] = table["header"][0], table["rows"][0]
             cap = ""
             headers, data = table["header"], table["rows"]
-            
+
         cap = " ".join(cap.split()[: self.data_args.max_token_length])  # filter too long caption
         header = [" ".join(h.split()[: self.data_args.max_token_length]) for h in headers][: self.data_args.max_column_length]
         data = [row[: self.data_args.max_column_length] for row in data[: self.data_args.max_row_length]]
@@ -316,7 +317,6 @@ def obtain_samples(process_idx, idxes_to_process):
         except Exception as e:
             print(e)
             continue
-    print(process_idx, len(new_samples))
     return new_samples
 
 
@@ -431,8 +431,8 @@ if __name__ == "__main__":
     n_process = 32
     shuffle = False
     pretraining = False
-    output_dir = f"/mnt/userdata/StructLM/data/hytrel/pretraining"
-    cache_dir = f"/mnt/userdata/StructLM/data/hytrel/cache"
+    output_dir = f"./data/hytrel/pretraining"
+    cache_dir = f"/mnt/userdata/StructLM/data/hytrel/cache/"
 
     model_path = "sentence-transformers/all-roberta-large-v1"
     llm = AutoModel.from_pretrained(
@@ -450,8 +450,8 @@ if __name__ == "__main__":
     for path, tab_tasks in (
         (
             "data/processed/skginstruct_skgonly.json",
-            # ["tab_fact"],
-            ["fetaqa", "hybridqa", "wikitq", "tabmwp", "wikisql", "tab_fact"],
+            ["tabmwp", "wikisql", "tab_fact"],
+            # ["hybridqa", "fetaqa", "wikitq", "tabmwp", "wikisql", "tab_fact"],
         ),
         (
             "data/processed/skginstruct_test_file_mistral.json",
@@ -481,12 +481,8 @@ if __name__ == "__main__":
                 train_dataset = None
 
             num_samples = len(samples)
-            # num_samples = 10
             print(task, num_samples)
-            
-            # results = obtain_samples(0, range(85035, num_samples))
-            # task_samples = results
-            
+
             with Pool(processes=n_process) as pool:
                 num_samples_in_chunk = num_samples // n_process + 1
                 jobs = []
@@ -504,34 +500,52 @@ if __name__ == "__main__":
                 task_samples.extend(samples)
             print(len(task_samples))
 
+            graphs = []
             with torch.no_grad():
                 for i, sample in tqdm(enumerate(task_samples)):
                     # replace graph with graph path
                     graph = sample.pop("graph")
 
                     split = "test" if "test" in path else "train"
-                    graph_path = f"{cache_dir}/{task}/{sample['idx']}.pkl"
-                    sample["graph_path"] = graph_path
+                    graph_path = os.path.join(cache_dir, task, f"{sample['idx']}.pt")
+                    sample["grpah_name"] = graph_path
+
                     if os.path.exists(graph_path):
+                        continue
                         try:
-                            with open(graph_path, 'rb') as f:
-                                pickle.load(f)
+                            torch.load(graph_path)
+                            # with open(graph_path, 'rb') as f:
+                            #     pickle.load(f)
+                            # continue
                         except Exception as e:
                             print(e)
-                            
-                        continue
-                    else:
-                        os.makedirs(os.path.dirname(graph_path), exist_ok=True)
+                            print(graph_path)
 
-                        embedding_s = get_sentence_embeds(llm, tokenizer, graph["x_s"])
-                        graph["x_s"] = embedding_s.detach().cpu().float().numpy()
 
-                        embedding_t = get_sentence_embeds(llm, tokenizer, graph["x_t"])
-                        graph["x_t"] = embedding_t.detach().cpu().float().numpy()
+                    embedding_s = get_sentence_embeds(llm, tokenizer, graph["x_s"])
+                    graph["x_s"] = embedding_s.detach().cpu().float().numpy()
 
-                        with open(graph_path, 'wb') as f:
-                            pickle.dump(graph, f)
+                    embedding_t = get_sentence_embeds(llm, tokenizer, graph["x_t"])
+                    graph["x_t"] = embedding_t.detach().cpu().float().numpy()
 
+                    del embedding_s, embedding_t
+
+                    graphs.append(graph)
+
+            if not pretraining:
+                os.makedirs(cache_dir, exist_ok=True)
+                with zipfile.ZipFile(f'{cache_dir}/{task}.zip', 'w', zipfile.ZIP_DEFLATED) as zipf:
+                    for i, (graph, sample) in enumerate(zip(graphs, task_samples)):
+                        grpah_name = f'graph_{sample['idx']}.pkl'
+                        sample["grpah_name"] = (f'{cache_dir}/{task}.zip', grpah_name)
+                        
+                        serialized_dict = pickle.dumps(graph)
+                        zipf.writestr(grpah_name, serialized_dict)
+            else:
+                for i, (graph, sample) in enumerate(zip(graphs, task_samples)):
+                    grpah_name = f'graph_{sample['idx']}.pkl'
+                    sample["grpah_name"] = (f'{cache_dir}/{task}.zip', grpah_name)
+                
             all_samples.extend(task_samples)
 
         print(len(all_samples))

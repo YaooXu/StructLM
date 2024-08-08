@@ -30,6 +30,8 @@ from utils.utils import load_json
 
 from transformers.data import DataCollatorWithPadding
 
+import zipfile
+
 logger = logging.getLogger(__name__)
 
 
@@ -289,9 +291,12 @@ class GraphDataset(Dataset):
         question_ids = torch.LongTensor(q)
 
         try:
-            torch.load(sample['graph_path'])
-            # with open(sample['graph_path'], 'rb') as f:
-            #     graph = pickle.load(f)
+            with zipfile.ZipFile(sample['graph_path'][0], 'r') as zipf:
+                # 打开并读取特定文件
+                with zipf.open(sample['graph_path'][1]) as file:
+                    serialized_dict = file.read()
+                    # 反序列化字典对象
+                    graph = pickle.loads(serialized_dict)
         except Exception as e:
             graph = None
             print(sample['graph_path'])

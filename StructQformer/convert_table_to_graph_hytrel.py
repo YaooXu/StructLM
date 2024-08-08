@@ -295,9 +295,9 @@ def obtain_samples(process_idx, idxes_to_process):
         try:
             graph = converter._text2graph(struct_data, True)
             if graph:
-                sample["graph"] = graph
-
                 if not pretraining:
+                    sample["graph"] = graph
+
                     # ft
                     sample["question"] = question
                     new_samples.append(sample)
@@ -428,11 +428,11 @@ def get_sentence_embeds(model, tokenizer, input_ids):
 
 if __name__ == "__main__":
 
-    n_process = 32
+    n_process = 8
     shuffle = False
-    pretraining = False
+    pretraining = True
     output_dir = f"./data/hytrel/pretraining"
-    cache_dir = f"/mnt/userdata/StructLM/data/hytrel/cache/"
+    cache_dir = f"./data/hytrel/cache/"
 
     model_path = "sentence-transformers/all-roberta-large-v1"
     llm = AutoModel.from_pretrained(
@@ -450,8 +450,8 @@ if __name__ == "__main__":
     for path, tab_tasks in (
         (
             "data/processed/skginstruct_skgonly.json",
-            ["tabmwp", "wikisql", "tab_fact"],
-            # ["hybridqa", "fetaqa", "wikitq", "tabmwp", "wikisql", "tab_fact"],
+            # ["tabmwp", "wikisql", "tab_fact"],
+            ["wikitq", "hybridqa", "fetaqa", "tabmwp", "wikisql", "tab_fact"],
         ),
         (
             "data/processed/skginstruct_test_file_mistral.json",
@@ -500,51 +500,37 @@ if __name__ == "__main__":
                 task_samples.extend(samples)
             print(len(task_samples))
 
-            graphs = []
-            with torch.no_grad():
-                for i, sample in tqdm(enumerate(task_samples)):
-                    # replace graph with graph path
-                    graph = sample.pop("graph")
-
-                    split = "test" if "test" in path else "train"
-                    graph_path = os.path.join(cache_dir, task, f"{sample['idx']}.pt")
-                    sample["grpah_name"] = graph_path
-
-                    if os.path.exists(graph_path):
-                        continue
-                        try:
-                            torch.load(graph_path)
-                            # with open(graph_path, 'rb') as f:
-                            #     pickle.load(f)
-                            # continue
-                        except Exception as e:
-                            print(e)
-                            print(graph_path)
-
-
-                    embedding_s = get_sentence_embeds(llm, tokenizer, graph["x_s"])
-                    graph["x_s"] = embedding_s.detach().cpu().float().numpy()
-
-                    embedding_t = get_sentence_embeds(llm, tokenizer, graph["x_t"])
-                    graph["x_t"] = embedding_t.detach().cpu().float().numpy()
-
-                    del embedding_s, embedding_t
-
-                    graphs.append(graph)
 
             if not pretraining:
-                os.makedirs(cache_dir, exist_ok=True)
-                with zipfile.ZipFile(f'{cache_dir}/{task}.zip', 'w', zipfile.ZIP_DEFLATED) as zipf:
-                    for i, (graph, sample) in enumerate(zip(graphs, task_samples)):
-                        grpah_name = f'graph_{sample['idx']}.pkl'
-                        sample["grpah_name"] = (f'{cache_dir}/{task}.zip', grpah_name)
-                        
-                        serialized_dict = pickle.dumps(graph)
-                        zipf.writestr(grpah_name, serialized_dict)
+                os.makedirs(f"{cache_dir}/{task}", exist_ok=True)
+
+                with torch.no_grad():
+                    for sample in tqdm(task_samples):
+                        # replace graph with graph path
+                        graph = sample.pop("graph")
+
+                        embedding_s = get_sentence_embeds(llm, tokenizer, graph["x_s"])
+                        graph["x_s"] = embedding_s.detach().cpu().float().numpy()
+
+                        embedding_t = get_sentence_embeds(llm, tokenizer, graph["x_t"])
+                        graph["x_t"] = embedding_t.detach().cpu().float().numpy()
+
+                        del embedding_s, embedding_t
+
+                        zip_file_path = f"{cache_dir}/{task}/{sample['idx'] // 1000}.zip"
+                        with zipfile.ZipFile(zip_file_path, 'a', zipfile.ZIP_DEFLATED) as zipf:
+                            graph_name = f"graph_{sample['idx']}.pkl"
+                            sample["graph_path"] = (zip_file_path, graph_name)
+                            
+                            serialized_dict = pickle.dumps(graph)
+                            zipf.writestr(graph_name, serialized_dict)
+
             else:
-                for i, (graph, sample) in enumerate(zip(graphs, task_samples)):
-                    grpah_name = f'graph_{sample['idx']}.pkl'
-                    sample["grpah_name"] = (f'{cache_dir}/{task}.zip', grpah_name)
+                for sample in tqdm(task_samples):
+                    zip_file_path = f"{cache_dir}/{task}/{sample['idx'] // 1000}.zip"
+                    graph_name = f"graph_{sample['idx']}.pkl"
+
+                    sample["graph_path"] = (zip_file_path, graph_name)
                 
             all_samples.extend(task_samples)
 

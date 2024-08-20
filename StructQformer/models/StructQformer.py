@@ -361,7 +361,17 @@ class StructQformerLLM(nn.Module):
 
             if args.qformer.ckpt_path is not None and not args.qformer.skip_encoder:
                 logger.info(f"loading qformer ckpt from {args.qformer.ckpt_path}")
-                self.qformer.load_state_dict(torch.load(os.path.join(args.qformer.ckpt_path, "Qformer.bin")))
+
+                only_load_grpah_encoder = False
+                if only_load_grpah_encoder:
+                    state_dict = torch.load(os.path.join(args.qformer.ckpt_path, "Qformer.bin"))
+                    prefix = 'hypergraph_encoder.'
+                    state_dict = {k[len(prefix):]:v for k,v in state_dict.items() if k.startswith(prefix)}
+
+                    self.qformer.hypergraph_encoder.load_state_dict(state_dict)
+                else:
+                    self.qformer.load_state_dict(torch.load(os.path.join(args.qformer.ckpt_path, "Qformer.bin")))
+
 
             self.qformer = self.qformer.to(kwargs["torch_dtype"])
         else:

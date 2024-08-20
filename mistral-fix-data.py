@@ -16,7 +16,7 @@ new_data = []
 for i, each in tqdm(enumerate(data)):
     struct_in_idx = each['formatted_input'].find(each['struct_in'][:10])
     sysend_idx = each['formatted_input'].find("<</SYS>>")
-    instruction = each['formatted_input'][sysend_idx + 8:struct_in_idx]
+    instruction = each['formatted_input'][sysend_idx + 8:struct_in_idx].strip()
     if each['text_in']:
         text_in_idx = each['formatted_input'].find(each['text_in'])
         struct_in = each['formatted_input'][struct_in_idx:text_in_idx].strip()

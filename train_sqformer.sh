@@ -31,60 +31,44 @@ wandb online
 # model_name_or_path=codellama/CodeLlama-7b-Instruct-hf
     # --gradient_checkpointing \
 
-dataset_dir=data/uniskg/wikitq
 dataset_dir=data/hytrel/wikitq
-roberta_size=large
-ft_type=lora
-
-t5_ft_type=fre_enc-full_dec
-t5_model_type=scrach
-t5_size=large
 
 llm=llama
 
 gas=1
 
-for size in base ; do
+for cfg in hytrel/v2-10k-trained_roberta_base-lora_llama3-10.cfg ; do
 
-    for t5_ft_type in freeze_enc_full_dec ; do
+    echo ${cfg}
 
-        for t5_model_type in scrach ; do
+    export WANDB_PROJECT=$(basename "$dataset_dir")
 
-        # cfg=v3.2-roberta_${roberta_size}-${t5_ft_type}_T5_${t5_size}-${ft_type}_${llm}-10.cfg
-        # cfg=t5_qformer/v3.3-${t5_ft_type}_trained_T5_${t5_size}-lora_${llm}-10.cfg
-        cfg=hytrel/v2-trained_roberta_base-lora_llama-10.cfg
+        # --gradient_checkpointing \
+    deepspeed --master_port=${master_port} StructQformer/train_sqformer.py \
+        --do_train \
+        --bf16 \
+        --deepspeed=${deepspeed_config_file} \
+        --cfg=${cfg} \
+        --load_best_model_at_end=True \
+        --do_eval \
+        --max_desc_length=${max_desc_length} \
+        --max_seq_length=${max_seq_length} \
+        --dataset_dir=${dataset_dir} \
+        --overwrite_output_dir \
+        --output_dir=./outputs/${dataset_dir}/${cfg} \
+        --seed=0 \
+        --num_train_epochs=${num_train_epochs} \
+        --per_device_train_batch_size=4 \
+        --gradient_accumulation_steps=${gas} \
+        --per_device_eval_batch_size=8 \
+        --save_strategy=epoch \
+        --evaluation_strategy=epoch \
+        --save_total_limit=1 \
+        --learning_rate=${lr} \
+        --weight_decay=${wd} \
+        --warmup_ratio=0.05 \
+        --lr_scheduler_type=cosine \
+        --logging_steps=50 \
+        --report_to wandb
 
-        echo ${cfg}
-
-        export WANDB_PROJECT=$(basename "$dataset_dir")
-
-            # --gradient_checkpointing \
-        deepspeed --master_port=${master_port} StructQformer/train_sqformer.py \
-            --do_train \
-            --bf16 \
-            --deepspeed=${deepspeed_config_file} \
-            --cfg=${cfg} \
-            --load_best_model_at_end=True \
-            --do_eval \
-            --max_desc_length=${max_desc_length} \
-            --max_seq_length=${max_seq_length} \
-            --dataset_dir=${dataset_dir} \
-            --overwrite_output_dir \
-            --output_dir=/mnt/userdata/StructLM/outputs/${dataset_dir}/${cfg} \
-            --seed=0 \
-            --num_train_epochs=${num_train_epochs} \
-            --per_device_train_batch_size=4 \
-            --gradient_accumulation_steps=${gas} \
-            --per_device_eval_batch_size=8 \
-            --save_strategy=epoch \
-            --evaluation_strategy=epoch \
-            --save_total_limit=1 \
-            --learning_rate=${lr} \
-            --weight_decay=${wd} \
-            --warmup_ratio=0.05 \
-            --lr_scheduler_type=cosine \
-            --logging_steps=50 \
-            --report_to wandb
-        done
-    done
 done

@@ -249,6 +249,7 @@ def obtain_samples(process_idx, idxes_to_process):
 
         if "test" in path:
             question = sample["question"] if "question" in sample else sample["statement"]
+            sample['question'] = question
             struct_data = sample["table"]
             sample["label"] = sample["seq_out"]
             sample["input"] = sample["formatted_input"]
@@ -277,6 +278,7 @@ def obtain_samples(process_idx, idxes_to_process):
             train_data = train_dataset[idx]
 
             question = sample["input"].split("\n\n")[-1]
+            sample['question'] = question
             assert (
                 question.lower().strip()
                 == (train_data["question"] if "question" in train_data else train_data["statement"]).lower().strip()
@@ -291,15 +293,12 @@ def obtain_samples(process_idx, idxes_to_process):
         # print(sample['input'])
         # print(question)
         # print(sample['label'])
-
         try:
             graph = converter._text2graph(struct_data, True)
+            sample["graph"] = graph
             if graph:
                 if not pretraining:
-                    sample["graph"] = graph
 
-                    # ft
-                    sample["question"] = question
                     new_samples.append(sample)
 
                     if "test" in path:
@@ -307,12 +306,20 @@ def obtain_samples(process_idx, idxes_to_process):
                     else:
                         tasks_to_n[sample["task_name"]] += 1
                 else:
+                    # to save memory
+                    sample.pop('graph')
+
                     # construct self-supervised data
                     qa_pairs = construct_pretraining_questions(struct_data)
                     for qa_pair in qa_pairs:
                         new_sample = deepcopy(sample)
+
                         new_sample["question"] = qa_pair[0]
                         new_sample["label"] = new_sample["seq_out"] = qa_pair[1]
+
+                        # replace original question with new question
+                        new_sample["input"] = new_sample["input"].replace(sample['question'], new_sample["question"])
+
                         new_samples.append(new_sample)
         except Exception as e:
             print(e)
@@ -428,19 +435,21 @@ def get_sentence_embeds(model, tokenizer, input_ids):
 
 if __name__ == "__main__":
 
-    n_process = 8
+    n_process = 12
     shuffle = False
-    pretraining = True
-    output_dir = f"./data/hytrel/pretraining"
-    cache_dir = f"./data/hytrel/cache/"
+    pretraining = False
+    output_dir = f"./data/hytrel/wikitq"
 
     model_path = "sentence-transformers/all-roberta-large-v1"
-    llm = AutoModel.from_pretrained(
-        model_path,
-        # max_memory={0: "78GiB", 1: "78GiB"},
-        device_map="auto",
-    )
-    llm.eval()
+    cache_dir = f"./data/hytrel/cache/"
+    cache_graphs = False
+    if cache_graphs:
+        llm = AutoModel.from_pretrained(
+            model_path,
+            # max_memory={0: "78GiB", 1: "78GiB"},
+            device_map="auto",
+        )
+        llm.eval()
 
     tokenizer = AutoTokenizer.from_pretrained(model_path, device_map="auto")
     if tokenizer.pad_token is None:
@@ -450,8 +459,8 @@ if __name__ == "__main__":
     for path, tab_tasks in (
         (
             "data/processed/skginstruct_skgonly.json",
-            # ["tabmwp", "wikisql", "tab_fact"],
-            ["wikitq", "hybridqa", "fetaqa", "tabmwp", "wikisql", "tab_fact"],
+            ["wikitq"],
+            # ["wikitq", "hybridqa", "fetaqa", "tabmwp", "wikisql", "tab_fact"],
         ),
         (
             "data/processed/skginstruct_test_file_mistral.json",
@@ -501,7 +510,7 @@ if __name__ == "__main__":
             print(len(task_samples))
 
 
-            if not pretraining:
+            if cache_graphs:
                 os.makedirs(f"{cache_dir}/{task}", exist_ok=True)
 
                 with torch.no_grad():
@@ -524,7 +533,6 @@ if __name__ == "__main__":
                             
                             serialized_dict = pickle.dumps(graph)
                             zipf.writestr(graph_name, serialized_dict)
-
             else:
                 for sample in tqdm(task_samples):
                     zip_file_path = f"{cache_dir}/{task}/{sample['idx'] // 1000}.zip"

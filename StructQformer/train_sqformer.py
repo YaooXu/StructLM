@@ -250,9 +250,12 @@ if __name__ == "__main__":
         # do not early stop in pretraining
         early_stopping_callback = EarlyStoppingCallback(early_stopping_patience=3)
         trainer.add_callback(early_stopping_callback)
+        resume_from_checkpoint=False
+    else:
+        resume_from_checkpoint=True
 
     if training_args.do_train:
-        trainer.train()
+        trainer.train(resume_from_checkpoint=resume_from_checkpoint)
 
     elif training_args.do_predict:
         trainer.data_collator = DataCollatorForGenerating(llm_tokenizer, encoder_tokenizer)

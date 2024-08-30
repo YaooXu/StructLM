@@ -90,6 +90,7 @@ def build_instruction_dataset(
     preprocessing_num_workers=32,
     num_query_tokens=10,
     training=True,
+    qformer_pretraining=False,
     shuffle_desc=True,
     reprocess=False,
 ):
@@ -105,7 +106,7 @@ def build_instruction_dataset(
         preprocessing_num_workers (int, optional): _description_. Defaults to 10.
     """
 
-    return GraphDataset(data_path, llm_tokenizer, encoder_tokenizer, num_query_tokens, max_seq_length, training)
+    return GraphDataset(data_path, llm_tokenizer, encoder_tokenizer, num_query_tokens, max_seq_length, training, qformer_pretraining)
 
     assert max_seq_length > max_desc_length
 
@@ -234,13 +235,15 @@ def build_instruction_dataset(
 
 
 class GraphDataset(Dataset):
-    def __init__(self, data_path, llm_tokenizer, encoder_tokenizer, num_query_tokens=10, max_seq_length=2048, training=True) -> None:
+    def __init__(self, data_path, llm_tokenizer, encoder_tokenizer, num_query_tokens=10, max_seq_length=2048, training=True, qformer_pretraining=True) -> None:
         self.raw_dataset = load_dataset("parquet", data_files=str(data_path))['train']
         self.llm_tokenizer = llm_tokenizer
         self.encoder_tokenizer = encoder_tokenizer
         self.num_query_tokens = num_query_tokens
         self.max_seq_length = max_seq_length
         self.training = training
+
+        self.sqformer_pretraining = qformer_pretraining
 
     def __getitem__(self, index):
         sample = self.raw_dataset[index]
@@ -251,9 +254,8 @@ class GraphDataset(Dataset):
             input = input[:idx] + \
                 f'\n\nstruct data representation tokens: {DEFAULT_GRAPH_PAD_TOKEN * self.num_query_tokens}' + \
                 input[idx:]
-            # input = f'{DEFAULT_GRAPH_PAD_TOKEN * self.num_query_tokens}' + input
-        # GRAPH_PAD_TOKEN_ID = self.llm_tokenizer.convert_tokens_to_ids([DEFAULT_GRAPH_PAD_TOKEN])[0]
         
+        # llm input and target
         tokenized_input = self.llm_tokenizer(
             input, return_attention_mask=False, add_special_tokens=False
         )
@@ -262,33 +264,29 @@ class GraphDataset(Dataset):
         tokenized_target = self.llm_tokenizer(
             target, return_attention_mask=False, add_special_tokens=False
         )
+        s = [self.llm_tokenizer.bos_token_id] + tokenized_input["input_ids"]
+        t = tokenized_target["input_ids"] + [self.llm_tokenizer.eos_token_id]
 
-        # question = sample['question']
-        # question = ' '.join(question.split()[:128])
-        # question = f'The query tokens for question "{question}" is {DEFAULT_GRAPH_PAD_TOKEN * self.num_query_tokens}'
-        # tokenized_question = self.llm_tokenizer(
-        #     question, return_attention_mask=False)
-
-        question = sample['question']
-        question = ' '.join(question.split()[:128])
-        tokenized_question = self.encoder_tokenizer(question, return_attention_mask=False)  
-        
-        # print(question)
-
-        s = tokenized_input["input_ids"]
-        t = tokenized_target["input_ids"]
-        q = tokenized_question["input_ids"]
-
-        max_seq_length = self.max_seq_length
-        s = [self.llm_tokenizer.bos_token_id] + s
-        t = t + [self.llm_tokenizer.eos_token_id]
         if self.training:
-            input_ids = torch.LongTensor(s + t)[:max_seq_length]
-            labels = torch.LongTensor([IGNORE_INDEX] * len(s) + t)[:max_seq_length]
+            input_ids = torch.LongTensor(s + t)[:self.max_seq_length]
+            labels = torch.LongTensor([IGNORE_INDEX] * len(s) + t)[:self.max_seq_length]
         else:
-            input_ids = torch.LongTensor(s)[:max_seq_length]
-            labels = torch.LongTensor([IGNORE_INDEX] * len(s))[:max_seq_length]
-        question_ids = torch.LongTensor(q)
+            input_ids = torch.LongTensor(s)[:self.max_seq_length]
+            labels = torch.LongTensor([IGNORE_INDEX] * len(s))[:self.max_seq_length]
+
+
+        # qformer input and target (for pretraining)
+        question = sample['question']
+        tokenized_input = self.encoder_tokenizer(question, return_attention_mask=False, add_special_tokens=False)
+        tokenized_target = self.encoder_tokenizer(target, return_attention_mask=False, add_special_tokens=False)
+        s = [self.encoder_tokenizer.bos_token_id] + tokenized_input["input_ids"]
+        t = tokenized_target["input_ids"] + [self.encoder_tokenizer.eos_token_id]
+        if self.sqformer_pretraining:
+            qformer_input_ids = torch.LongTensor(s + t)[:500]
+            qformer_labels = torch.LongTensor([IGNORE_INDEX] * len(s) + t)[:500]
+        else:
+            qformer_input_ids = torch.LongTensor(s)[:500]
+            qformer_labels = torch.LongTensor([IGNORE_INDEX] * len(s))[:500]
 
         try:
             with zipfile.ZipFile(sample['graph_path'][0], 'r') as zipf:
@@ -301,12 +299,17 @@ class GraphDataset(Dataset):
             graph = None
             print(sample['graph_path'])
             print(e)
-            
+        
+        qformer_input = {
+            'graph': graph,
+            "input_ids": qformer_input_ids,
+            "labels": qformer_labels,
+        }
+
         item = {
             "input_ids": input_ids,
             "labels": labels,
-            "question_ids": question_ids,
-            "graph": graph,
+            "qformer_input": qformer_input,
         }
         return item
 
@@ -346,20 +349,28 @@ class DataCollatorForGraphSupervisedDataset(object):
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
         self._set_llm_padding_side()
 
-        graphs = [BipartiteData(**instance["graph"]) for instance in instances]
+        # Qformer input
+        graphs = [BipartiteData(**instance['qformer_input']["graph"]) for instance in instances]
         graphs = Batch.from_data_list(graphs, follow_batch=['x_s', 'x_t'])
         
         # graphs = merge_graph(graphs)
         # print(graphs['dist_mat'].shape)
 
-        # Qformer input
-        question_ids = [instance["question_ids"] for instance in instances]
-        question_ids = self.encoder_tokenizer.pad({"input_ids": question_ids})["input_ids"]
+        qformer_input_ids = [instance['qformer_input']["input_ids"] for instance in instances]
+        qformer_input_ids = self.encoder_tokenizer.pad({"input_ids": qformer_input_ids})["input_ids"]
+
+        qformer_labels = [instance['qformer_input']["labels"] for instance in instances]
+        qformer_labels = self.encoder_tokenizer.pad({"input_ids": qformer_labels})["input_ids"]
+
         qformer_inputs = {
-            "question_input_ids": question_ids,
-            "question_attention_mask": question_ids.ne(self.encoder_tokenizer.pad_token_id),
+            "input_ids": qformer_input_ids,
+            "labels": qformer_labels,
+            "attention_mask": qformer_input_ids.ne(self.encoder_tokenizer.pad_token_id),
             "graphs": graphs,
         }
+        batch = {
+            'qformer_inputs': qformer_inputs
+        } 
 
         # LLM input
         input_ids, labels = tuple(
@@ -371,13 +382,11 @@ class DataCollatorForGraphSupervisedDataset(object):
         labels = self._pad_labels(labels)
         attention_mask = input_ids.ne(self.llm_tokenizer.pad_token_id)
 
-        batch = {
+        batch.update({
             "input_ids": input_ids,
             "labels": labels,
             "attention_mask": attention_mask,
-        }
-
-        batch["qformer_inputs"] = qformer_inputs
+        })
 
         return batch
 

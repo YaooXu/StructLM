@@ -4,7 +4,9 @@
 # export NCCL_P2P_DISABLE=1 NCCL_IB_DISABLE=1
 # cd /mnt/publiccache/yaoxu/StructLM/
 
-export HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+export WANDB_API_KEY=efe05a42b8b37cb8028408410c02bcefbddf42c0
+export CUDA_VISIBLE_DEVICES=0,1,2,3
+# export HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 
 # deepspeed_config_file=ds_zero2_offload.json
 deepspeed_config_file=ds_zero2.json
@@ -37,7 +39,7 @@ llm=llama
 
 gas=1
 
-for cfg in hytrel/v2-10k-trained_roberta_base-lora_llama3-10.cfg ; do
+for cfg in hytrel-llama3/v2-lora_llama-0.cfg hytrel-llama3/v2-roberta_base-lora_llama-10.cfg ; do
 
     echo ${cfg}
 

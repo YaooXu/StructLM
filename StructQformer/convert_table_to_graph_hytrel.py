@@ -39,6 +39,47 @@ MISSING_CELL_TAG = "[CELL]"
 MISSING_HEADER_TAG = "[HEAD]"
 
 
+def convert_totto_table_format(table):
+    # 计算表格的列数
+    # num_columns = max([sum(cell["column_span"] for cell in row) for row in table])
+    num_columns = sum(cell["column_span"] for cell in table[0])
+    
+    try:
+        # 初始化一个空的表格结构，用于放置最终的 Markdown 表格数据
+        table_structure = [[""] * num_columns for _ in range(len(table))]
+        
+        for row_idx, row in enumerate(table):
+            col_idx = 0
+            for cell in row:
+                while table_structure[row_idx][col_idx] != "":
+                    col_idx += 1
+                
+                # 将单元格的值填入表格结构中
+                table_structure[row_idx][col_idx] = cell["value"]
+                
+                # 如果 column_span 或 row_span 大于 1，则填充跨越的单元格
+                for i in range(cell["row_span"]):
+                    if row_idx + i >= len(table_structure):
+                        break
+                    
+                    for j in range(cell["column_span"]):
+                        if i == 0 and j == 0:
+                            continue
+                        if col_idx + j >= num_columns:
+                            break
+                        
+                        table_structure[row_idx + i][col_idx + j] = cell["value"]
+
+        return {
+            'header': table_structure[0],
+            'rows': table_structure[1:]
+        }
+    except:
+        return {
+            'header': None,
+            'rows': None
+        }
+
 class BipartiteData(Data):
     def __init__(self, edge_index=None, x_s=None, x_t=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -248,7 +289,20 @@ def obtain_samples(process_idx, idxes_to_process):
         sample["idx"] = idx
 
         if "test" in path:
-            question = sample["question"] if "question" in sample else sample["statement"]
+            if 'question' in sample:
+                question = sample['question']
+            elif 'statement' in sample:
+                question = sample['statement']
+            elif 'hypothesis' in sample:
+                question = sample['hypothesis']
+            else:
+                # totto
+                question = 'What the table snippet describes?'
+                sample["formatted_input"] = sample["formatted_input"].replace('### Response:\n', '').strip()
+                sample["formatted_input"] += f"\n\n\nquestion:\n\n{question}\n\n### Response:\n"
+
+                sample["table"] = convert_totto_table_format(sample["table"])
+
             sample['question'] = question
             struct_data = sample["table"]
             sample["label"] = sample["seq_out"]
@@ -277,12 +331,24 @@ def obtain_samples(process_idx, idxes_to_process):
         else:
             train_data = train_dataset[idx]
 
-            question = sample["input"].split("\n\n")[-1]
+            if "question" in train_data:
+                ori_question = train_data["question"]
+            elif "statement" in train_data:
+                ori_question = train_data["statement"]
+            else:
+                # no question in dataset like totto
+                ori_question = None
+
+            if ori_question:
+                question = sample["input"].split("\n\n")[-1]
+                assert question.lower().strip() == ori_question.lower().strip()
+            else:
+                # totto
+                question = 'What the table snippet describes?'
+                sample["input"] += f'\n\n\nquestion:\n\n{question}'
+                train_data["table"] = convert_totto_table_format(train_data["table"])
+
             sample['question'] = question
-            assert (
-                question.lower().strip()
-                == (train_data["question"] if "question" in train_data else train_data["statement"]).lower().strip()
-            )
 
             struct_data = train_data["table"]
 
@@ -317,8 +383,11 @@ def obtain_samples(process_idx, idxes_to_process):
                         new_sample["question"] = qa_pair[0]
                         new_sample["label"] = new_sample["seq_out"] = qa_pair[1]
 
-                        # replace original question with new question
-                        new_sample["input"] = new_sample["input"].replace(sample['question'], new_sample["question"])
+                        # # replace original question with new question
+                        # new_sample["input"] = new_sample["input"].replace(sample['question'], new_sample["question"])
+
+                        # only remain question in pretraining
+                        new_sample["input"] = f"Question: {new_sample['question']}\n\n### Response:\n"
 
                         new_samples.append(new_sample)
         except Exception as e:
@@ -435,18 +504,21 @@ def get_sentence_embeds(model, tokenizer, input_ids):
 
 if __name__ == "__main__":
 
-    n_process = 12
+    n_process = 32
     shuffle = False
-    pretraining = False
-    output_dir = f"./data/hytrel/wikitq"
-
     model_path = "sentence-transformers/all-roberta-large-v1"
-    cache_dir = f"./data/hytrel/cache/"
+
+    pretraining = False
+    output_dir = f"./data/hytrel/all-table-tasks"
+
+    # pretraining = True
+    # output_dir = f"./data/hytrel/pretraining"
+
     cache_graphs = False
+    cache_dir = f"./data/hytrel/cache2"
     if cache_graphs:
         llm = AutoModel.from_pretrained(
             model_path,
-            # max_memory={0: "78GiB", 1: "78GiB"},
             device_map="auto",
         )
         llm.eval()
@@ -459,13 +531,11 @@ if __name__ == "__main__":
     for path, tab_tasks in (
         (
             "data/processed/skginstruct_skgonly.json",
-            ["wikitq"],
-            # ["wikitq", "hybridqa", "fetaqa", "tabmwp", "wikisql", "tab_fact"],
+            ["fetaqa", "hybridqa", "wikitq", "tabmwp", "totto", "wikisql", "tab_fact"],
         ),
         (
             "data/processed/skginstruct_test_file_mistral.json",
-            ["task: wiki table question"],
-            # ["task: tabfact", "task: wiki table question", "task: wikisql"],
+            ["task: fetaqa", "task: hybridqa", "task: totto", "task: wikisql", "task: tabfact"]
         ),
     ):
         all_samples = load_json(path=path)
@@ -484,13 +554,15 @@ if __name__ == "__main__":
             samples = tasks_to_samples[task]
 
             if "test" not in path:
-                train_dataset = load_dataset(f"tasks/{task}.py")["train"]
+                train_dataset = load_dataset(f"tasks/{task}.py", trust_remote_code=True)["train"]
                 assert len(train_dataset) == len(samples)
             else:
                 train_dataset = None
 
             num_samples = len(samples)
             print(task, num_samples)
+
+            # obtain_samples(0, [1,])
 
             with Pool(processes=n_process) as pool:
                 num_samples_in_chunk = num_samples // n_process + 1
@@ -508,7 +580,6 @@ if __name__ == "__main__":
             for samples in results:
                 task_samples.extend(samples)
             print(len(task_samples))
-
 
             if cache_graphs:
                 os.makedirs(f"{cache_dir}/{task}", exist_ok=True)
@@ -535,6 +606,8 @@ if __name__ == "__main__":
                             zipf.writestr(graph_name, serialized_dict)
             else:
                 for sample in tqdm(task_samples):
+                    graph = sample.pop("graph") if "graph" in sample else None
+
                     zip_file_path = f"{cache_dir}/{task}/{sample['idx'] // 1000}.zip"
                     graph_name = f"graph_{sample['idx']}.pkl"
 

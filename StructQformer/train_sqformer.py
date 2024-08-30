@@ -146,10 +146,12 @@ if __name__ == "__main__":
     logger.setLevel(log_level)
 
     llm_tokenizer = AutoTokenizer.from_pretrained(model_args.llm.model_name_or_path, use_fast=False)
-
+    if llm_tokenizer.pad_token is None:
+        llm_tokenizer.pad_token = llm_tokenizer.eos_token
+        
     encoder_tokenizer = AutoTokenizer.from_pretrained(model_args.qformer.model_name_or_path, use_fast=False)
 
-    hypergraph_enc_config = AutoConfig.from_pretrained("google-bert/bert-base-uncased")
+    hypergraph_enc_config = AutoConfig.from_pretrained("FacebookAI/roberta-base")
     hypergraph_enc_config.update(
         {
             "vocab_size": len(encoder_tokenizer),
@@ -198,6 +200,7 @@ if __name__ == "__main__":
             max_seq_length=training_args.max_seq_length,
             max_desc_length=training_args.max_desc_length,
             num_query_tokens=model_args.qformer.num_query_tokens,
+            qformer_pretraining=model_args.qformer.pretraining
         )
         eval_dataset = build_instruction_dataset(
             dataset_dir / f"val.pq",
@@ -206,6 +209,7 @@ if __name__ == "__main__":
             max_seq_length=training_args.max_seq_length,
             max_desc_length=training_args.max_desc_length,
             num_query_tokens=model_args.qformer.num_query_tokens,
+            qformer_pretraining=model_args.qformer.pretraining
         )
         eval_dataset = eval_dataset.select(random.sample(range(len(eval_dataset)), k=min(1000, len(eval_dataset))))
 
@@ -218,6 +222,7 @@ if __name__ == "__main__":
             max_desc_length=training_args.max_desc_length,
             num_query_tokens=model_args.qformer.num_query_tokens,
             training=False,
+            qformer_pretraining=model_args.qformer.pretraining
         )
         test_examples = load_jsonl(dataset_dir / f"ori_test.jsonl")
         if 'pretraining' in str(dataset_dir):
@@ -250,12 +255,24 @@ if __name__ == "__main__":
         # do not early stop in pretraining
         early_stopping_callback = EarlyStoppingCallback(early_stopping_patience=3)
         trainer.add_callback(early_stopping_callback)
-        resume_from_checkpoint=False
+        latest_checkpoint = None
     else:
-        resume_from_checkpoint=True
+        # 检查是否存在 checkpoints
+        if os.path.exists(training_args.output_dir):
+            checkpoints = [os.path.join(training_args.output_dir, d) for d in os.listdir(training_args.output_dir) if d.startswith("checkpoint-")]
+        else:
+            checkpoints = None
+
+        # 如果存在 checkpoints，则从最新的 checkpoint 恢复训练
+        if checkpoints:
+            latest_checkpoint = max(checkpoints, key=os.path.getctime)
+            print(f"Resuming from checkpoint: {latest_checkpoint}")
+        else:
+            latest_checkpoint = None
+            print("No checkpoints found. Starting a new training run.")
 
     if training_args.do_train:
-        trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+        trainer.train(resume_from_checkpoint=latest_checkpoint)
 
     elif training_args.do_predict:
         trainer.data_collator = DataCollatorForGenerating(llm_tokenizer, encoder_tokenizer)

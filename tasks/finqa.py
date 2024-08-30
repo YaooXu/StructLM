@@ -82,7 +82,7 @@ class FinQA(datasets.GeneratorBasedBuilder):
                 "id": example['id'], 
                 "post_text": example['post_text'], 
                 "pre_text": example['pre_text'], 
-                "question": example['qa']['question'], ``
+                "question": example['qa']['question'],
                 "answer": example['qa']['answer'],
                 "steps": str(example['qa']['steps']),
                 "program": str(example['qa']['program']),

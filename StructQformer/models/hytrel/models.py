@@ -40,7 +40,7 @@ class Embedding(nn.Module):
       
   #   llm.enable_adapter_layers()
   #   llm.train()
-  def forward(self, llm, x_s, x_t):
+  def forward(self, x_s, x_t):
     # llm.disable_adapter_layers()
     
     # is_train = False
@@ -103,8 +103,8 @@ class Encoder(nn.Module):
     self.embed_layer = Embedding(config)
     self.layer = nn.ModuleList([EncoderLayer(config) for _ in range(config.num_hidden_layers)])
 
-  def forward(self, data, llm):
-    embedding_s, embedding_t = self.embed_layer(llm, data.x_s, data.x_t)
+  def forward(self, data):
+    embedding_s, embedding_t = self.embed_layer(data.x_s, data.x_t)
     embedding_t = torch.cat([embedding_t, embedding_s], dim=0)
 
     # Add self-loop

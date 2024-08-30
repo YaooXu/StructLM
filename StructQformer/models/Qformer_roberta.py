@@ -96,7 +96,8 @@ class RobertaEmbeddings(nn.Module):
         )
 
     def forward(
-        self, input_ids=None, token_type_ids=None, position_ids=None, inputs_embeds=None, past_key_values_length=0
+        self, input_ids=None, token_type_ids=None, position_ids=None, inputs_embeds=None, past_key_values_length=0,
+        query_embeds=None, only_query_embeds=False
     ):
         if position_ids is None:
             if input_ids is not None:
@@ -131,6 +132,14 @@ class RobertaEmbeddings(nn.Module):
         if self.position_embedding_type == "absolute":
             position_embeddings = self.position_embeddings(position_ids)
             embeddings += position_embeddings
+        
+        # TODO, xuyao
+        if query_embeds is not None:
+            if only_query_embeds:
+                embeddings = query_embeds
+            else:
+                embeddings = torch.cat([query_embeds, embeddings], dim=1)
+
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings
@@ -152,6 +161,11 @@ class RobertaEmbeddings(nn.Module):
         )
         return position_ids.unsqueeze(0).expand(input_shape)
 
+    def preprocess_query_embeds(self, query_embeds):
+        embeddings = query_embeds
+        embeddings = self.LayerNorm(embeddings)
+        embeddings = self.dropout(embeddings)
+        return embeddings
 
 # Copied from transformers.models.bert.modeling_bert.BertSelfAttention with Bert->Roberta
 class RobertaSelfAttention(nn.Module):
@@ -400,7 +414,7 @@ class RobertaLayer(nn.Module):
         self.intermediate = RobertaIntermediate(config)
         self.output = RobertaOutput(config)
 
-        # TODO, xy
+        # TODO, xuyao
         self.intermediate_query = RobertaIntermediate(config)
         self.output_query = RobertaOutput(config)
         
@@ -459,7 +473,7 @@ class RobertaLayer(nn.Module):
             cross_attn_present_key_value = cross_attention_outputs[-1]
             present_key_value = present_key_value + cross_attn_present_key_value
 
-        # TODO, xy
+        # TODO, xuyao
         if query_length > 0:
             layer_output = apply_chunking_to_forward(
                 self.feed_forward_chunk_query,
@@ -479,7 +493,7 @@ class RobertaLayer(nn.Module):
             layer_output = apply_chunking_to_forward(
                 self.feed_forward_chunk, self.chunk_size_feed_forward, self.seq_len_dim, attention_output
             )
-            
+
         outputs = (layer_output,) + outputs
 
         # if decoder, return the attn key/values as the last output
@@ -493,7 +507,7 @@ class RobertaLayer(nn.Module):
         layer_output = self.output(intermediate_output, attention_output)
         return layer_output
     
-    # TODO: xy
+    # TODO: xuyao
     def feed_forward_chunk_query(self, attention_output):
         intermediate_output = self.intermediate_query(attention_output)
         layer_output = self.output_query(intermediate_output, attention_output)
@@ -755,7 +769,7 @@ class RobertaModel(RobertaPreTrainedModel):
         for layer, heads in heads_to_prune.items():
             self.encoder.layer[layer].attention.prune_heads(heads)
 
-    # added
+    # TODO, xuyao
     def get_extended_attention_mask(
         self, attention_mask: Tensor, input_shape: Tuple[int], device: torch.device = None, dtype: torch.float = None
     ) -> Tensor:
@@ -798,8 +812,9 @@ class RobertaModel(RobertaPreTrainedModel):
                     seq_ids[None, None, :].repeat(batch_size, seq_length, 1)
                     <= seq_ids[None, :, None]
                 )
-                
-                # changed
+                causal_mask = causal_mask.to(attention_mask.device)
+
+                # TODO, xuyao
                 causal_mask = torch.ones_like(causal_mask, device=attention_mask.device)
                 
                 extended_attention_mask = (
@@ -932,8 +947,17 @@ class RobertaModel(RobertaPreTrainedModel):
             embedding_output = self.embeddings(
                 input_ids=input_ids,
                 position_ids=position_ids,
+                token_type_ids=token_type_ids,
+                inputs_embeds=inputs_embeds,
                 past_key_values_length=past_key_values_length,
             )
+        # embedding_output = self.embeddings(
+        #     input_ids=input_ids,
+        #     position_ids=position_ids,
+        #     token_type_ids=token_type_ids,
+        #     inputs_embeds=inputs_embeds,
+        #     past_key_values_length=past_key_values_length,
+        # )
             
         encoder_outputs = self.encoder(
             embedding_output,

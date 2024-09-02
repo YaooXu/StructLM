@@ -308,6 +308,11 @@ def obtain_samples(process_idx, idxes_to_process):
             sample["label"] = sample["seq_out"]
             sample["input"] = sample["formatted_input"]
 
+            idx = sample["input"].rfind('\n\n\n')
+            # ensure not the \n\n\n before Instruction
+            assert idx >= 200
+            sample["input"] = sample["input"][:idx] + '[GRAPH_PAD]' + sample["input"][idx+3:]
+
             # if shuffle:
             #     df = pd.DataFrame(sample['table']['rows'], columns=sample['table']['header'])
             #     # shuffle rows
@@ -354,8 +359,11 @@ def obtain_samples(process_idx, idxes_to_process):
 
             # table = re.findall(r"table:\n\n([\s\S]*)\n\n\n", sample["input"])[0]
             sys_prompt = "Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.\n\n### Instruction:\n\n\n"
+
+            sample["input"] = sample["input"].replace('\n\n\n', '[GRAPH_PAD]')
             sample["input"] = sys_prompt + sample["input"] + "\n\n### Response:\n"
 
+        assert '[GRAPH_PAD]' in sample['input']
         # print(sample['input'])
         # print(question)
         # print(sample['label'])
@@ -535,7 +543,7 @@ if __name__ == "__main__":
         ),
         (
             "data/processed/skginstruct_test_file_mistral.json",
-            ["task: fetaqa", "task: hybridqa", "task: totto", "task: wikisql", "task: tabfact"]
+            ["task: wiki table question", "task: fetaqa", "task: hybridqa", "task: totto", "task: wikisql", "task: tabfact"]
         ),
     ):
         all_samples = load_json(path=path)

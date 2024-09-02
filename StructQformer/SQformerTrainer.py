@@ -203,6 +203,9 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
             with open(os.path.join(cur_output_dir, "predictions.json"), "w") as f:
                 json.dump(predictions, f)
 
+            with open(os.path.join(cur_output_dir, "predictions_summary.json"), "w") as f:
+                json.dump(summary, f, indent=4)
+
             # Only the main node log the results by default
             self.log(metrics)
 
@@ -410,7 +413,7 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
             _state_dict = model_to_save.state_dict()
 
         output_state_dict = {
-            k.partition("qformer.")[-1]: state_dict[k] for k in _state_dict if "qformer" in k
+            k.partition("qformer.")[-1]: _state_dict[k] for k in _state_dict if "qformer" in k
         }
         torch.save(output_state_dict, os.path.join(output_dir, "Qformer.bin"))
 

@@ -259,12 +259,6 @@ class StructQformer(nn.Module):
             
             # inputs_embeds = query_embeds
             # attention_mask = query_atts
-
-            inputs_embeds = self.model.roberta.embeddings(
-                question_ids, 
-                query_embeds=query_embeds, 
-                only_query_embeds=self.args.qformer.only_query_embeds
-            )
             
             if self.args.qformer.only_query_embeds:
                 attention_mask = query_atts
@@ -272,13 +266,15 @@ class StructQformer(nn.Module):
                 attention_mask = torch.cat([query_atts, question_attention_mask], dim=1)
 
             query_output = self.model.roberta(
-                inputs_embeds=inputs_embeds,
+                input_ids=question_ids,
                 attention_mask=attention_mask,
                 encoder_hidden_states=graph_embeds,
                 encoder_attention_mask=graph_attention_mask,
                 use_cache=False,
                 return_dict=True,
-                query_length=self.num_query_tokens
+                query_length=self.num_query_tokens,
+                query_embeds=query_embeds, 
+                only_query_embeds=self.args.qformer.only_query_embeds
             )
 
             # for ori qformer
@@ -384,21 +380,29 @@ class StructQformer(nn.Module):
         query_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
         query_atts = torch.ones(query_embeds.shape[:-1]).to(query_embeds.device)
 
-        query_output = self.model.roberta(
-            query_embeds=query_embeds, 
-            encoder_hidden_states=graph_embeds,
-            encoder_attention_mask=graph_attention_mask,
-            use_cache=True,
-            return_dict=True,
-        )
-
-        attention_mask = torch.cat([query_atts, attention_mask], dim=1)
         outputs = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
-            past_key_values=query_output.past_key_values,
+            encoder_hidden_states=graph_embeds,
+            encoder_attention_mask=graph_attention_mask,
             labels=qformer_inputs["labels"],
         )
+
+        # query_output = self.model.roberta(
+        #     query_embeds=query_embeds, 
+        #     encoder_hidden_states=graph_embeds,
+        #     encoder_attention_mask=graph_attention_mask,
+        #     use_cache=True,
+        #     return_dict=True,
+        # )
+
+        # attention_mask = torch.cat([query_atts, attention_mask], dim=1)
+        # outputs = self.model(
+        #     input_ids=input_ids,
+        #     attention_mask=attention_mask,
+        #     past_key_values=query_output.past_key_values,
+        #     labels=qformer_inputs["labels"],
+        # )
 
         return outputs
 
@@ -455,9 +459,9 @@ class StructQformerLLM(nn.Module):
             if args.llm.finetuning_type == "full":
                 self.llm.requires_grad_(True)
             elif args.llm.finetuning_type == "lora":
-                if args.ckpt_path is not None:
-                    logger.info(f"loading lora ckpt from {args.ckpt_path}")
-                    self.llm.load_adapter(args.ckpt_path)
+                if args.llm.ckpt_path is not None:
+                    logger.info(f"loading lora ckpt from {args.llm.ckpt_path}")
+                    self.llm.load_adapter(args.llm.ckpt_path)
                 else:
                     logger.info("adding lora model")
                     peft_config = LoraConfig(

@@ -151,9 +151,10 @@ if __name__ == "__main__":
         
     encoder_tokenizer = AutoTokenizer.from_pretrained(model_args.qformer.model_name_or_path, use_fast=False)
 
-    hypergraph_enc_config = AutoConfig.from_pretrained("FacebookAI/roberta-base")
+    hypergraph_enc_config = AutoConfig.from_pretrained(model_args.qformer.model_name_or_path)
     hypergraph_enc_config.update(
         {
+            "num_hidden_layers": 12,
             "vocab_size": len(encoder_tokenizer),
             "pre_norm": False,
             "activation_dropout": 0.1,
@@ -225,12 +226,10 @@ if __name__ == "__main__":
             qformer_pretraining=model_args.qformer.pretraining
         )
         test_examples = load_jsonl(dataset_dir / f"ori_test.jsonl")
-        if 'pretraining' in str(dataset_dir):
-            test_dataset = test_dataset.select(random.sample(range(len(eval_dataset)), k=min(100, len(eval_dataset))))
 
-    if "debug" in training_args.output_dir:
-        test_dataset = test_dataset.select(range(10))
-        eval_dataset = eval_dataset.select(range(10))
+    # if "debug" in training_args.output_dir:
+    #     test_dataset = test_dataset.select(random.sample(range(len(test_dataset)), k=1000))
+    #     eval_dataset = eval_dataset.select(random.sample(range(len(test_dataset)), k=1000))
 
     data_collator = DataCollatorForGraphSupervisedDataset(llm_tokenizer, encoder_tokenizer)
 
@@ -256,20 +255,20 @@ if __name__ == "__main__":
         early_stopping_callback = EarlyStoppingCallback(early_stopping_patience=3)
         trainer.add_callback(early_stopping_callback)
         latest_checkpoint = None
+        
+    # 检查是否存在 checkpoints
+    if os.path.exists(training_args.output_dir):
+        checkpoints = [os.path.join(training_args.output_dir, d) for d in os.listdir(training_args.output_dir) if d.startswith("checkpoint-")]
     else:
-        # 检查是否存在 checkpoints
-        if os.path.exists(training_args.output_dir):
-            checkpoints = [os.path.join(training_args.output_dir, d) for d in os.listdir(training_args.output_dir) if d.startswith("checkpoint-")]
-        else:
-            checkpoints = None
+        checkpoints = None
 
-        # 如果存在 checkpoints，则从最新的 checkpoint 恢复训练
-        if checkpoints:
-            latest_checkpoint = max(checkpoints, key=os.path.getctime)
-            print(f"Resuming from checkpoint: {latest_checkpoint}")
-        else:
-            latest_checkpoint = None
-            print("No checkpoints found. Starting a new training run.")
+    # 如果存在 checkpoints，则从最新的 checkpoint 恢复训练
+    if checkpoints:
+        latest_checkpoint = max(checkpoints, key=os.path.getctime)
+        print(f"Resuming from checkpoint: {latest_checkpoint}")
+    else:
+        latest_checkpoint = None
+        print("No checkpoints found. Starting a new training run.")
 
     if training_args.do_train:
         trainer.train(resume_from_checkpoint=latest_checkpoint)

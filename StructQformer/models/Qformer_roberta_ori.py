@@ -95,10 +95,46 @@ class RobertaEmbeddings(nn.Module):
             config.max_position_embeddings, config.hidden_size, padding_idx=self.padding_idx
         )
 
+    # TODO, xuyao
     def forward(
-        self, input_ids=None, token_type_ids=None, position_ids=None, inputs_embeds=None, past_key_values_length=0,
-        query_embeds=None, only_query_embeds=False
+        self,
+        input_ids=None,
+        position_ids=None,
+        query_embeds=None,
+        past_key_values_length=0,
+        token_type_ids=None,
     ):
+        # if position_ids is None:
+        #     if input_ids is not None:
+        #         # Create the position ids from the input token ids. Any padded tokens remain padded.
+        #         position_ids = create_position_ids_from_input_ids(input_ids, self.padding_idx, past_key_values_length)
+        #     else:
+        #         # TODO: xuyao, query tokens do not use position embeddings
+        #         position_ids = self.create_position_ids_from_inputs_embeds(query_embeds)
+
+        # if input_ids is not None:
+        #     input_shape = input_ids.size()
+        # else:
+        #     input_shape = query_embeds.size()[:-1]
+
+        # if input_ids is not None:
+        #     embeddings = self.word_embeddings(input_ids)
+        #     if self.position_embedding_type == "absolute":
+        #         position_embeddings = self.position_embeddings(position_ids)
+        #         embeddings = embeddings + position_embeddings
+
+        #     if query_embeds is not None:
+        #         embeddings = torch.cat((query_embeds, embeddings), dim=1)
+        # else:
+        #     embeddings = query_embeds
+
+        # embeddings = self.LayerNorm(embeddings)
+        # embeddings = self.dropout(embeddings)
+        # return embeddings
+
+        # original embeddings
+        inputs_embeds = query_embeds
+
         if position_ids is None:
             if input_ids is not None:
                 # Create the position ids from the input token ids. Any padded tokens remain padded.
@@ -126,24 +162,17 @@ class RobertaEmbeddings(nn.Module):
 
         if inputs_embeds is None:
             inputs_embeds = self.word_embeddings(input_ids)
+
         token_type_embeddings = self.token_type_embeddings(token_type_ids)
 
         embeddings = inputs_embeds + token_type_embeddings
         if self.position_embedding_type == "absolute":
             position_embeddings = self.position_embeddings(position_ids)
             embeddings += position_embeddings
-        
-        # TODO, xuyao
-        if query_embeds is not None:
-            if only_query_embeds:
-                embeddings = query_embeds
-            else:
-                embeddings = torch.cat([query_embeds, embeddings], dim=1)
-
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings
-    
+
     def create_position_ids_from_inputs_embeds(self, inputs_embeds):
         """
         We are provided embeddings directly. We cannot infer which are padded so just generate sequential position ids.
@@ -161,11 +190,6 @@ class RobertaEmbeddings(nn.Module):
         )
         return position_ids.unsqueeze(0).expand(input_shape)
 
-    def preprocess_query_embeds(self, query_embeds):
-        embeddings = query_embeds
-        embeddings = self.LayerNorm(embeddings)
-        embeddings = self.dropout(embeddings)
-        return embeddings
 
 # Copied from transformers.models.bert.modeling_bert.BertSelfAttention with Bert->Roberta
 class RobertaSelfAttention(nn.Module):
@@ -297,8 +321,7 @@ class RobertaSelfAttention(nn.Module):
 
         outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
 
-        if self.is_decoder:
-            outputs = outputs + (past_key_value,)
+        outputs = outputs + (past_key_value,)
         return outputs
 
 
@@ -439,47 +462,35 @@ class RobertaLayer(nn.Module):
             past_key_value=self_attn_past_key_value,
         )
         attention_output = self_attention_outputs[0]
+        outputs = self_attention_outputs[1:-1]
 
-        # if decoder, the last output is tuple of self-attn cache
-        if self.is_decoder:
-            outputs = self_attention_outputs[1:-1]
-            present_key_value = self_attention_outputs[-1]
-        else:
-            outputs = self_attention_outputs[1:]  # add self attentions if we output attention weights
+        present_key_value = self_attention_outputs[-1]
 
-        cross_attn_present_key_value = None
-        if self.is_decoder and encoder_hidden_states is not None:
-            if not hasattr(self, "crossattention"):
-                raise ValueError(
-                    f"If `encoder_hidden_states` are passed, {self} has to be instantiated with cross-attention layers"
-                    " by setting `config.add_cross_attention=True`"
-                )
-
-            # cross_attn cached key/values tuple is at positions 3,4 of past_key_value tuple
-            cross_attn_past_key_value = past_key_value[-2:] if past_key_value is not None else None
-            cross_attention_outputs = self.crossattention(
-                attention_output,
-                attention_mask,
-                head_mask,
-                encoder_hidden_states,
-                encoder_attention_mask,
-                cross_attn_past_key_value,
-                output_attentions,
-            )
-            attention_output = cross_attention_outputs[0]
-            outputs = outputs + cross_attention_outputs[1:-1]  # add cross attentions if we output attention weights
-
-            # add cross-attn cache to positions 3,4 of present_key_value tuple
-            cross_attn_present_key_value = cross_attention_outputs[-1]
-            present_key_value = present_key_value + cross_attn_present_key_value
-
-        # TODO, xuyao
         if query_length > 0:
+            query_attention_output = attention_output[:, :query_length, :]
+
+            if self.add_cross_attention:
+                assert (
+                    encoder_hidden_states is not None
+                ), "encoder_hidden_states must be given for cross-attention layers"
+                cross_attention_outputs = self.crossattention(
+                    query_attention_output,
+                    attention_mask,
+                    head_mask,
+                    encoder_hidden_states,
+                    encoder_attention_mask,
+                    output_attentions=output_attentions,
+                )
+                query_attention_output = cross_attention_outputs[0]
+                outputs = (
+                    outputs + cross_attention_outputs[1:-1]
+                )  # add cross attentions if we output attention weights
+
             layer_output = apply_chunking_to_forward(
                 self.feed_forward_chunk_query,
                 self.chunk_size_feed_forward,
                 self.seq_len_dim,
-                attention_output[:, :query_length, :],
+                query_attention_output,
             )
             if attention_output.shape[1] > query_length:
                 layer_output_text = apply_chunking_to_forward(
@@ -491,14 +502,14 @@ class RobertaLayer(nn.Module):
                 layer_output = torch.cat([layer_output, layer_output_text], dim=1)
         else:
             layer_output = apply_chunking_to_forward(
-                self.feed_forward_chunk, self.chunk_size_feed_forward, self.seq_len_dim, attention_output
+                self.feed_forward_chunk,
+                self.chunk_size_feed_forward,
+                self.seq_len_dim,
+                attention_output,
             )
-
         outputs = (layer_output,) + outputs
 
-        # if decoder, return the attn key/values as the last output
-        if self.is_decoder:
-            outputs = outputs + (present_key_value,)
+        outputs = outputs + (present_key_value,)
 
         return outputs
 
@@ -583,8 +594,7 @@ class RobertaEncoder(nn.Module):
                 next_decoder_cache += (layer_outputs[-1],)
             if output_attentions:
                 all_self_attentions = all_self_attentions + (layer_outputs[1],)
-                if self.config.add_cross_attention:
-                    all_cross_attentions = all_cross_attentions + (layer_outputs[2],)
+                all_cross_attentions = all_cross_attentions + (layer_outputs[2],)
 
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
@@ -771,31 +781,30 @@ class RobertaModel(RobertaPreTrainedModel):
 
     # TODO, xuyao
     def get_extended_attention_mask(
-        self, attention_mask: Tensor, input_shape: Tuple[int], device: torch.device = None, dtype: torch.float = None, is_decoder=False
+        self,
+        attention_mask: Tensor,
+        input_shape: Tuple[int],
+        is_decoder: bool,
+        has_query: bool = False,
     ) -> Tensor:
         """
         Makes broadcastable attention and causal masks so that future and masked tokens are ignored.
 
         Arguments:
-            attention_mask (`torch.Tensor`):
+            attention_mask (:obj:`torch.Tensor`):
                 Mask with ones indicating tokens to attend to, zeros for tokens to ignore.
-            input_shape (`Tuple[int]`):
+            input_shape (:obj:`Tuple[int]`):
                 The shape of the input to the model.
+            device: (:obj:`torch.device`):
+                The device of the input to the model.
 
         Returns:
-            `torch.Tensor` The extended attention mask, with a the same dtype as `attention_mask.dtype`.
+            :obj:`torch.Tensor` The extended attention mask, with a the same dtype as :obj:`attention_mask.dtype`.
         """
-        if dtype is None:
-            dtype = self.dtype
-
-        if not (attention_mask.dim() == 2 and is_decoder):
-            # show warning only if it won't be shown in `create_extended_attention_mask_for_decoder`
-            if device is not None:
-                warnings.warn(
-                    "The `device` argument is deprecated and will be removed in v5 of Transformers.", FutureWarning
-                )
         # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
         # ourselves in which case we just need to make it broadcastable to all heads.
+        device = attention_mask.device
+        
         if attention_mask.dim() == 3:
             extended_attention_mask = attention_mask[:, None, :, :]
         elif attention_mask.dim() == 2:
@@ -803,17 +812,43 @@ class RobertaModel(RobertaPreTrainedModel):
             # - if the model is a decoder, apply a causal mask in addition to the padding mask
             # - if the model is an encoder, make the mask broadcastable to [batch_size, num_heads, seq_length, seq_length]
             if is_decoder:
-                # extended_attention_mask = ModuleUtilsMixin.create_extended_attention_mask_for_decoder(
-                #     input_shape, attention_mask, device
-                # )
                 batch_size, seq_length = input_shape
+
                 seq_ids = torch.arange(seq_length, device=device)
                 causal_mask = (
                     seq_ids[None, None, :].repeat(batch_size, seq_length, 1)
                     <= seq_ids[None, :, None]
                 )
-                causal_mask = causal_mask.to(attention_mask.device)
-                
+
+                # add a prefix ones mask to the causal mask
+                # causal and attention masks must have same type with pytorch version < 1.3
+                causal_mask = causal_mask.to(attention_mask.dtype)
+
+                if causal_mask.shape[1] < attention_mask.shape[1]:
+                    prefix_seq_len = attention_mask.shape[1] - causal_mask.shape[1]
+                    if has_query:  # UniLM style attention mask
+                        causal_mask = torch.cat(
+                            [
+                                torch.zeros(
+                                    (batch_size, prefix_seq_len, seq_length),
+                                    device=device,
+                                    dtype=causal_mask.dtype,
+                                ),
+                                causal_mask,
+                            ],
+                            axis=1,
+                        )
+                    causal_mask = torch.cat(
+                        [
+                            torch.ones(
+                                (batch_size, causal_mask.shape[1], prefix_seq_len),
+                                device=device,
+                                dtype=causal_mask.dtype,
+                            ),
+                            causal_mask,
+                        ],
+                        axis=-1,
+                    )
                 extended_attention_mask = (
                     causal_mask[:, None, :, :] * attention_mask[:, None, None, :]
                 )
@@ -821,16 +856,20 @@ class RobertaModel(RobertaPreTrainedModel):
                 extended_attention_mask = attention_mask[:, None, None, :]
         else:
             raise ValueError(
-                f"Wrong shape for input_ids (shape {input_shape}) or attention_mask (shape {attention_mask.shape})"
+                "Wrong shape for input_ids (shape {}) or attention_mask (shape {})".format(
+                    input_shape, attention_mask.shape
+                )
             )
 
         # Since attention_mask is 1.0 for positions we want to attend and 0.0 for
         # masked positions, this operation will create a tensor which is 0.0 for
-        # positions we want to attend and the dtype's smallest value for masked positions.
+        # positions we want to attend and -10000.0 for masked positions.
         # Since we are adding it to the raw scores before the softmax, this is
         # effectively the same as removing these entirely.
-        extended_attention_mask = extended_attention_mask.to(dtype=dtype)  # fp16 compatibility
-        extended_attention_mask = (1.0 - extended_attention_mask) * torch.finfo(dtype).min
+        extended_attention_mask = extended_attention_mask.to(
+            dtype=self.dtype
+        )  # fp16 compatibility
+        extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
         return extended_attention_mask
     
     @add_start_docstrings_to_model_forward(ROBERTA_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
@@ -847,7 +886,7 @@ class RobertaModel(RobertaPreTrainedModel):
         token_type_ids: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.Tensor] = None,
         head_mask: Optional[torch.Tensor] = None,
-        inputs_embeds: Optional[torch.Tensor] = None,
+        query_embeds: Optional[torch.Tensor] = None,
         encoder_hidden_states: Optional[torch.Tensor] = None,
         encoder_attention_mask: Optional[torch.Tensor] = None,
         past_key_values: Optional[List[torch.FloatTensor]] = None,
@@ -855,10 +894,7 @@ class RobertaModel(RobertaPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-        query_length=0,
-        query_embeds=None, 
-        only_query_embeds=False,
-        is_decoder=False
+        is_decoder=False,
     ) -> Union[Tuple[torch.Tensor], BaseModelOutputWithPoolingAndCrossAttentions]:
         r"""
         encoder_hidden_states  (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`, *optional*):
@@ -886,46 +922,57 @@ class RobertaModel(RobertaPreTrainedModel):
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        if is_decoder:
-            use_cache = use_cache if use_cache is not None else self.config.use_cache
-        else:
-            use_cache = False
+        # if self.config.is_decoder:
+        #     use_cache = use_cache if use_cache is not None else self.config.use_cache
+        # else:
+        #     use_cache = False
 
-        if input_ids is not None and inputs_embeds is not None:
-            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
-        elif input_ids is not None:
-            self.warn_if_padding_and_no_attention_mask(input_ids, attention_mask)
-            input_shape = input_ids.size()
-        elif inputs_embeds is not None:
-            input_shape = inputs_embeds.size()[:-1]
-        else:
-            raise ValueError("You have to specify either input_ids or inputs_embeds")
-
-        batch_size, seq_length = input_shape
-        device = input_ids.device if input_ids is not None else inputs_embeds.device
+        if input_ids is None:
+            assert (
+                query_embeds is not None
+            ), "You have to specify query_embeds when input_ids is None"
 
         # past_key_values_length
-        past_key_values_length = past_key_values[0][0].shape[2] if past_key_values is not None else 0
+        past_key_values_length = (
+            past_key_values[0][0].shape[2] - self.config.query_length
+            if past_key_values is not None
+            else 0
+        )
+
+        query_length = query_embeds.shape[1] if query_embeds is not None else 0
+
+        embedding_output = self.embeddings(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            query_embeds=query_embeds,
+            past_key_values_length=past_key_values_length,
+        )
+
+        input_shape = embedding_output.size()[:-1]
+        batch_size, seq_length = input_shape
+        device = embedding_output.device
 
         if attention_mask is None:
-            attention_mask = torch.ones(((batch_size, seq_length + past_key_values_length)), device=device)
-
-        if token_type_ids is None:
-            if hasattr(self.embeddings, "token_type_ids"):
-                buffered_token_type_ids = self.embeddings.token_type_ids[:, :seq_length]
-                buffered_token_type_ids_expanded = buffered_token_type_ids.expand(batch_size, seq_length)
-                token_type_ids = buffered_token_type_ids_expanded
-            else:
-                token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=device)
+            attention_mask = torch.ones(
+                ((batch_size, seq_length + past_key_values_length)), device=device
+            )
 
         # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
         # ourselves in which case we just need to make it broadcastable to all heads.
-        # TODO: xuyao
-        extended_attention_mask: torch.Tensor = self.get_extended_attention_mask(attention_mask, input_shape, is_decoder=is_decoder)
+        if is_decoder:
+            extended_attention_mask = self.get_extended_attention_mask(
+                attention_mask,
+                input_ids.shape,
+                is_decoder,
+                has_query=(query_embeds is not None),
+            )
+        else:
+            extended_attention_mask = self.get_extended_attention_mask(
+                attention_mask, input_shape, is_decoder
+            )
 
         # If a 2D or 3D attention mask is provided for the cross-attention
         # we need to make broadcastable to [batch_size, num_heads, seq_length, seq_length]
-        # TODO: xuyao
         if encoder_hidden_states is not None:
             encoder_batch_size, encoder_sequence_length, _ = encoder_hidden_states.size()
             encoder_hidden_shape = (encoder_batch_size, encoder_sequence_length)
@@ -941,18 +988,7 @@ class RobertaModel(RobertaPreTrainedModel):
         # input head_mask has shape [num_heads] or [num_hidden_layers x num_heads]
         # and head_mask is converted to shape [num_hidden_layers x batch x num_heads x seq_length x seq_length]
         head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
-
-        # TODO, xuyao
-        embedding_output = self.embeddings(
-            input_ids=input_ids,
-            position_ids=position_ids,
-            token_type_ids=token_type_ids,
-            inputs_embeds=inputs_embeds,
-            past_key_values_length=past_key_values_length,
-            query_embeds=query_embeds, 
-            only_query_embeds=only_query_embeds
-        )
-
+            
         encoder_outputs = self.encoder(
             embedding_output,
             attention_mask=extended_attention_mask,
@@ -1015,7 +1051,7 @@ class RobertaForCausalLM(RobertaPreTrainedModel):
         token_type_ids: Optional[torch.LongTensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         head_mask: Optional[torch.FloatTensor] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
+        query_embeds: Optional[torch.FloatTensor] = None,
         encoder_hidden_states: Optional[torch.FloatTensor] = None,
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
@@ -1024,7 +1060,7 @@ class RobertaForCausalLM(RobertaPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-        is_decoder=True
+        is_decoder=True,
     ) -> Union[Tuple[torch.Tensor], CausalLMOutputWithCrossAttentions]:
         r"""
         encoder_hidden_states  (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`, *optional*):
@@ -1072,6 +1108,8 @@ class RobertaForCausalLM(RobertaPreTrainedModel):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         if labels is not None:
             use_cache = False
+        if past_key_values is not None:
+            query_embeds = None
 
         outputs = self.roberta(
             input_ids,
@@ -1079,7 +1117,7 @@ class RobertaForCausalLM(RobertaPreTrainedModel):
             token_type_ids=token_type_ids,
             position_ids=position_ids,
             head_mask=head_mask,
-            inputs_embeds=inputs_embeds,
+            query_embeds=query_embeds,
             encoder_hidden_states=encoder_hidden_states,
             encoder_attention_mask=encoder_attention_mask,
             past_key_values=past_key_values,
@@ -1087,10 +1125,13 @@ class RobertaForCausalLM(RobertaPreTrainedModel):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
-            is_decoder=is_decoder
+            is_decoder=is_decoder,
         )
 
         sequence_output = outputs[0]
+        if query_embeds is not None:
+            sequence_output = outputs[0][:, query_embeds.shape[1] :, :]
+
         prediction_scores = self.lm_head(sequence_output)
 
         lm_loss = None

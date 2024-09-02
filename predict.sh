@@ -1,72 +1,63 @@
 # chmod 777 /mnt/publiccache/yaoxu
 # chmod 777 /mnt/userdata
 # cd /mnt/publiccache/yaoxu/StructLM/
-# export HF_HOME=/mnt/publiccache/huggingfacue
 
-export HF_HOME=/mnt/publiccache/huggingface
-export NCCL_P2P_DISABLE=1 NCCL_IB_DISABLE=1
+# export NCCL_P2P_DISABLE=1 NCCL_IB_DISABLE=1
+export HF_HOME=/cpfs/29f69eb5e2e60f26/user/GPT/pretrain/zengxiangrong2/intern/xuyao/.cache/huggingface
+export WANDB_API_KEY=efe05a42b8b37cb8028408410c02bcefbddf42c0
 
-export HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1
-export WANDB_PROJECT=WTQ
-
-# deepspeed_config_file=ds_zero2_no_offload.json
+# deepspeed_config_file=ds_zero2_offload.json
 deepspeed_config_file=ds_zero2.json
 max_desc_length=2048
 max_seq_length=2560
 num_train_epochs=3
 lr=2e-5
 wd=0.05
-eval_steps=1000
-master_port=29500
+master_port=29503
 strategy=v2.6
-cross_attention_freq=1
 num_query_tokens=10
-finetuning_type=lora
+cross_attention_freq=1
+finetuning_type=freeze_backbone
 
-dataset_dir=data_g_retrieve/roberta/wikitq
+wandb online
 
-wandb offline
+dataset_dir=data/hytrel/wikitq
 
-ckpt_path=/mnt/userdata/StructLM/outputs/data/roberta/wikitq/5e_no_inter_Llama-2-7b-hf_roberta-base_lora_v2.6_2048_2560_10_1_0.05_2e-5/checkpoint-7080
+llm=llama
 
-model_name_or_path=meta-llama/Llama-2-7b-hf
-# model_name_or_path=TIGER-Lab/StructLM-7B-Mistral
-# model_name_or_path=codellama/CodeLlama-7b-Instruct-hf
+gas=8
+
+for cfg in hytrel/v2-predict.cfg ; do
+
+    echo ${cfg}
+
+    export WANDB_PROJECT=$(basename "$dataset_dir")
+
         # --gradient_checkpointing \
-
-encoder_model_path=FacebookAI/roberta-base
-
-model_name=$(basename "$model_name_or_path")
-
-        # --deepspeed=${deepspeed_config_file} \
-deepspeed --include localhost:0,1,2,3,4 --master_port=${master_port} StructQformer/train_sqformer.py \
-        --model_name_or_path=${model_name_or_path} \
-        --ckpt_path=${ckpt_path} \
-        --encoder_model_path=${encoder_model_path} \
-        --finetuning_type=${finetuning_type} \
+    deepspeed --master_port=${master_port} StructQformer/train_sqformer.py \
         --do_predict \
-        --do_eval \
         --bf16 \
-        --strategy=${strategy} \
-        --num_query_tokens=${num_query_tokens} \
+        --cfg=${cfg} \
+        --load_best_model_at_end=True \
+        --do_eval \
         --max_desc_length=${max_desc_length} \
         --max_seq_length=${max_seq_length} \
-        --cross_attention_freq=${cross_attention_freq} \
         --dataset_dir=${dataset_dir} \
-        --output_dir=tmp_pred/ \
+        --overwrite_output_dir \
+        --output_dir=./outputs/${dataset_dir}/${cfg} \
         --seed=0 \
         --num_train_epochs=${num_train_epochs} \
-        --per_device_train_batch_size=1 \
-        --per_device_eval_batch_size=2 \
-        --gradient_accumulation_steps=1 \
-        --save_strategy=steps \
-        --evaluation_strategy=steps \
-        --eval_steps=${eval_steps} \
-        --save_steps=${eval_steps} \
-        --save_total_limit=1 \
+        --per_device_train_batch_size=4 \
+        --gradient_accumulation_steps=${gas} \
+        --per_device_eval_batch_size=16 \
+        --save_strategy=epoch \
+        --evaluation_strategy=epoch \
+        --save_total_limit=3 \
         --learning_rate=${lr} \
         --weight_decay=${wd} \
-        --warmup_ratio=0.03 \
+        --warmup_ratio=0.05 \
         --lr_scheduler_type=cosine \
-        --logging_steps=50 \
+        --logging_steps=2 \
         --report_to wandb
+
+done

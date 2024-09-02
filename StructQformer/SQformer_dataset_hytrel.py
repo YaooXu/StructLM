@@ -248,16 +248,16 @@ class GraphDataset(Dataset):
     def __getitem__(self, index):
         sample = self.raw_dataset[index]
 
-        input = sample['input']
         if self.num_query_tokens > 0:
-            idx = input.rfind('\n\n\n')
-            input = input[:idx] + \
-                f'\n\nstruct data representation tokens: {DEFAULT_GRAPH_PAD_TOKEN * self.num_query_tokens}' + \
-                input[idx:]
-        
+            sample['input'] = sample['input'].replace('[GRAPH_PAD]', \
+                f'\n\nstruct data representation tokens: {DEFAULT_GRAPH_PAD_TOKEN * self.num_query_tokens}\n\n\n')
+        else:
+            sample['input'] = sample['input'].replace('[GRAPH_PAD]', \
+                '\n\n\n')
+                
         # llm input and target
         tokenized_input = self.llm_tokenizer(
-            input, return_attention_mask=False, add_special_tokens=False
+            sample['input'], return_attention_mask=False, add_special_tokens=False
         )
 
         target = f"{sample['label']}"

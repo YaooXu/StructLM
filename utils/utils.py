@@ -7,6 +7,20 @@ instruct = (
 
 question_pattern = "Answer the following question with the help of the given list of the knowledge graph triples. knowledge graph triples:\n{kg_tuples}\nquestion:{question}"
 
+def print_trainable_params(model):
+    trainable_params = 0
+    all_param = 0
+
+    for name, param in model.named_parameters():
+        num_params = param.numel()
+
+        all_param += num_params
+        if param.requires_grad:
+            # print(name, param.shape, num_params)
+            trainable_params += num_params
+
+    print(f"{trainable_params} / {all_param}, {trainable_params*100/all_param}%")
+    return trainable_params, all_param
 
 def convert_kg_tuples_to_str(all_triples):
     kg_tuples = []

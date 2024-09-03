@@ -31,7 +31,7 @@ import torch.nn as nn
 
 from SQformer_dataset import DEFAULT_CVT_TOKEN, DEFAULT_GRAPH_PAD_TOKEN
 from torch.nn import CrossEntropyLoss
-from peft import get_peft_config, get_peft_model, LoraConfig, TaskType
+from peft import get_peft_config, get_peft_model, LoraConfig, TaskType, PromptTuningConfig, PromptTuningInit
 
 logger = logging.getLogger(__name__)
 
@@ -97,8 +97,6 @@ class StructQformer(nn.Module):
             
             self.roberta_config = AutoConfig.from_pretrained(args.qformer.model_name_or_path)
 
-            # self.model = BertLMHeadModel.from_pretrained(args.qformer.model_name_or_path, config=self.encoder_config)
-            # for roberta
             self.roberta_config.add_cross_attention = True
             self.roberta_config.is_decoder = True
             self.roberta_config.query_length = self.num_query_tokens
@@ -119,110 +117,21 @@ class StructQformer(nn.Module):
                     lora_alpha=args.qformer.lora_alpha,
                     lora_dropout=args.qformer.lora_dropout,
                 )
-                self.model = get_peft_model(self.model, peft_config)                
+                self.model = get_peft_model(self.model, peft_config)
             
             self.query_token_embeds = nn.Parameter(torch.zeros(self.num_query_tokens, self.roberta_config.hidden_size))
             self.query_token_embeds.data.normal_(mean=0.0, std=self.roberta_config.initializer_range)
 
             self.projector1 = nn.Linear(self.graph_encoder.config.hidden_size, self.roberta_config.hidden_size)
-            self.projector2 = nn.Linear(self.roberta_config.hidden_size, 4096)
-
-            # self.LayerNorm = nn.LayerNorm(
-            #     self.encoder_config.hidden_size, eps=self.encoder_config.layer_norm_eps
-            # )
-        elif self.strategy[:2] == "v3":
-            # if 'prefix' in args.encoder.cfg:··
-            #     from UnifiedSKG.models.unified.prefixtuning import Model
-            # elif 'finetune' in args.encoder.cfg:
-            #     from UnifiedSKG.models.unified.finetune import Model
-
-            t5_config = AutoConfig.from_pretrained(args.encoder.model_name_or_path)
-            t5_config.num_query_tokens = 10
-            self.t5 = T5ForConditionalGeneration.from_pretrained(args.encoder.model_name_or_path, config=t5_config)
-            self.encoder = self.t5.encoder
-            self.decoder = self.t5.decoder
-
-            if args.encoder.finetuning_type == "full":
-                self.t5.requires_grad_(True)
-            elif args.encoder.finetuning_type == "lora":
-                logger.info("adding lora model")
-                peft_config = LoraConfig(
-                    task_type=TaskType.SEQ_2_SEQ_LM,
-                    inference_mode=False,
-                    target_modules=args.encoder.target_modules.split(","),
-                    r=args.encoder.r,
-                    lora_alpha=args.encoder.lora_alpha,
-                    lora_dropout=args.encoder.lora_dropout,
-                )
-                self.t5 = get_peft_model(self.t5, peft_config)
-            elif args.encoder.finetuning_type == "freeze_enc_full_dec":
-                self.encoder.requires_grad_(False)
-                self.decoder.requires_grad_(True)
-            else:
-                raise NotImplementedError
-
-            self.t5.query_tokens_embeds.requires_grad_(True)
-
-            # # for qformer
-            # self.qformer_config = AutoConfig.from_pretrained(args.qformer.model_name_or_path)
-            # self.qformer_config.add_cross_attention = True
-            # self.qformer_config.is_decoder = True
-            # self.qformer_config.use_dist_bias = False
-
-            # self.decoder = RobertaModel.from_pretrained(
-            #     args.qformer.model_name_or_path, config=self.qformer_config,
-            # )
-
-            self.query_token_embeds = nn.Parameter(torch.zeros(self.num_query_tokens, self.graph_encoder.config.hidden_size))
-            self.projector1 = nn.Linear(4096, self.graph_encoder.config.hidden_size)
-
-            self.projector2 = nn.Linear(self.graph_encoder.config.hidden_size, 4096)
+            self.ln_norm1 = nn.LayerNorm(self.graph_encoder.config.hidden_size)
         else:
-            self.graph_encoder = None
-            self.decoder = None
-            self.query_token_embeds = nn.Parameter(torch.zeros(self.num_query_tokens, 4096))
-            self.projector1 = self.projector2 = None
-
-        self.ln_norm1 = nn.LayerNorm(self.graph_encoder.config.hidden_size)
-        self.ln_norm2 = nn.LayerNorm(4096)
-
-    #     self.init_weight()
-
-    # def init_weight(self):
-    #     for proj in [self.projector1, self.projector2]:
-    #         if proj:
-    #             proj.weight.data.normal_(mean=0.0, std=0.02)
-    #             if proj.bias is not None:
-    #                 proj.bias.data.zero_()
-
-    #     # for ln in [self.ln_norm1, self.ln_norm2]:
-    #     #     ln.bias.data.zero_()
-    #     #     ln.weight.data.fill_(1.0)
-
-    def resize_token_embeddings(self, new_num_tokens):
-        if self.graph_encoder:
-            self.graph_encoder.model.resize_token_embeddings(new_num_tokens)
-        # if self.model is not None:
-        #     self.model.resize_token_embeddings(new_num_tokens)
-
-    @property
-    def base_model(self):
-        return self.decoder
-
-    # as this value is added after initializing the model
-    @property
-    def bert_graph_pad_token(self):
-        return self.args.bert_graph_pad_token
+            raise NotImplementedError
+        
+        self.config = self.roberta_config
 
     @property
     def device(self):
         return self.decoder.device
-
-    def gen_query_embeds_pt(self, graph, llm, llm_graph_pad_token_id):
-        # vanilla prompt tuning
-        batch_size = graph["question_input_ids"].shape[0]
-        query_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
-        return query_embeds
 
     def gen_query_embeds_v2(self, qformer_inputs, llm, llm_graph_pad_token_id):
         question_ids = qformer_inputs["input_ids"]
@@ -277,81 +186,19 @@ class StructQformer(nn.Module):
                 only_query_embeds=self.args.qformer.only_query_embeds
             )
 
-            # for ori qformer
-            # query_output = self.model.roberta(
-            #     query_embeds=query_embeds, 
-            #     encoder_hidden_states=graph_embeds,
-            #     encoder_attention_mask=graph_attention_mask,
-            #     use_cache=True,
-            #     return_dict=True,
-            # )
-
             query_embeds = query_output.last_hidden_state[:, :self.num_query_tokens, :]
 
-        res_embeds = self.projector2(query_embeds)
-        res_embeds = self.ln_norm2(res_embeds)
+        return query_embeds
 
-        return res_embeds
-
-    def gen_query_embeds_v3(self, qformer_inputs, llm, llm_graph_pad_token_id):
-        question_ids = qformer_inputs["question_input_ids"]
-        batch_size = question_ids.shape[0]
-
-        if self.args.skip_encoder:
-            res_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
-        else:
-            qformer_inputs["qformer_inputs"].pop("labels")
-
-            encoder_output = self.t5(only_return_query_embeds=True, **qformer_inputs["qformer_inputs"])
-            res_embeds = encoder_output
-
-            # res_embeds = self.ln_norm1(encoder_output)
-            # print(res_embeds.norm(dim=-1))
-            # encoder_hidden_states = encoder_output.last_hidden_state
-            # encoder_attention_mask = qformer_inputs['qformer_inputs']['attention_mask']
-
-            # if 'inter' in self.strategy:
-            #     # inter
-            #     query_embeds = self.query_embeds_generator(qformer_inputs, llm, llm_graph_pad_token_id)
-            #     query_embeds = self.projector1(query_embeds)
-            # else:
-            #     # not inter
-            #     query_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
-
-            # query_atts = torch.ones(query_embeds.shape[:-1]).to(self.device)
-
-            # question_output = self.decoder(
-            #     inputs_embeds=query_embeds,
-            #     attention_mask=query_atts,
-            #     encoder_hidden_states=encoder_hidden_states,
-            #     encoder_attention_mask=encoder_attention_mask,
-            #     # query_length=self.num_query_tokens,
-            #     # use_cache=False,
-            # )
-            # res_embeds = question_output.last_hidden_state
-
-        # print(res_embeds.norm(dim=-1))
-        res_embeds = self.projector2(res_embeds)
-        res_embeds = self.ln_norm2(res_embeds)
-
-        # print('q', query_embeds.norm(dim=-1))
-        # print('r', res_embeds.norm(dim=-1))
-
-        return res_embeds
-
-    def forward(self, qformer_inputs, llm, llm_graph_pad_token_id):
-        if self.strategy == "pt":
-            query_embeds = self.gen_query_embeds_pt(qformer_inputs, llm, llm_graph_pad_token_id)
-        elif self.strategy[:2] == "v2":
+    def gen_query_embeds(self, qformer_inputs, llm, llm_graph_pad_token_id):
+        if self.strategy[:2] == "v2":
             query_embeds = self.gen_query_embeds_v2(qformer_inputs, llm, llm_graph_pad_token_id)
-        elif self.strategy[:2] == "v3":
-            query_embeds = self.gen_query_embeds_v3(qformer_inputs, llm, llm_graph_pad_token_id)
         else:
             raise NotImplementedError
 
         return query_embeds
     
-    def pretrain_forward(self, qformer_inputs):
+    def forward(self, qformer_inputs, **kwargs):
         input_ids, attention_mask = qformer_inputs["input_ids"], qformer_inputs["attention_mask"]
         batch_size = input_ids.shape[0]
 
@@ -388,22 +235,6 @@ class StructQformer(nn.Module):
             labels=qformer_inputs["labels"],
         )
 
-        # query_output = self.model.roberta(
-        #     query_embeds=query_embeds, 
-        #     encoder_hidden_states=graph_embeds,
-        #     encoder_attention_mask=graph_attention_mask,
-        #     use_cache=True,
-        #     return_dict=True,
-        # )
-
-        # attention_mask = torch.cat([query_atts, attention_mask], dim=1)
-        # outputs = self.model(
-        #     input_ids=input_ids,
-        #     attention_mask=attention_mask,
-        #     past_key_values=query_output.past_key_values,
-        #     labels=qformer_inputs["labels"],
-        # )
-
         return outputs
 
 class StructQformerLLM(nn.Module):
@@ -418,72 +249,66 @@ class StructQformerLLM(nn.Module):
         self.args = args
         self.num_query_tokens = args.qformer.num_query_tokens
 
+        # llm
+        self.llm: AutoModelForCausalLM = AutoModelForCausalLM.from_pretrained(
+            args.llm.model_name_or_path, attn_implementation=args.llm.attn_implementation, **kwargs
+        )
+        self.init_tokenizer_and_embeds(llm_tokenizer, encoder_tokenizer, DEFAULT_GRAPH_PAD_TOKEN)
+
+        if args.llm.finetuning_type == "full":
+            self.llm.requires_grad_(True)
+        elif args.llm.finetuning_type == "lora":
+            if args.llm.ckpt_path is not None:
+                logger.info(f"loading lora ckpt from {args.llm.ckpt_path}")
+                self.llm.load_adapter(args.llm.ckpt_path)
+            else:
+                logger.info("adding lora model")
+                peft_config = LoraConfig(
+                    task_type=TaskType.CAUSAL_LM,
+                    inference_mode=False,
+                    target_modules=args.llm.target_modules.split(","),
+                    r=args.llm.r,
+                    lora_alpha=args.llm.lora_alpha,
+                    lora_dropout=args.llm.lora_dropout,
+                )
+                self.llm = get_peft_model(self.llm, peft_config)
+                self.llm.print_trainable_parameters()
+        elif self.args.qformer.model_finetuning_type == 'pt':
+            if args.llm.ckpt_path is not None:
+                logger.info(f"loading lora ckpt from {args.llm.ckpt_path}")
+                self.llm.load_adapter(args.llm.ckpt_path)
+            else:
+                logger.info("adding prompt tuning model")
+                peft_config = PromptTuningConfig(
+                    task_type=TaskType.CAUSAL_LM,
+                    prompt_tuning_init=PromptTuningInit.RANDOM,
+                    num_virtual_tokens=self.num_query_tokens,
+                )
+                self.llm = get_peft_model(self.llm, peft_config)
+                self.llm.print_trainable_parameters()
+        elif args.llm.finetuning_type == "freeze":
+            self.llm.requires_grad_(False)
+        else:
+            raise NotImplementedError
+
+        # qformer
         if self.num_query_tokens > 0:
             self.qformer = StructQformer(args, hypergraph_enc_config)
 
-            # TODO: not need in UnifiedSKG
-            # encoder_tokenizer.add_tokens(["[TAB]", "[HEAD]", "[CELL]", "[ROW]",
-            #                               "scinotexp"], special_tokens=True)
-            # self.bert_graph_pad_token = encoder_tokenizer.convert_tokens_to_ids([DEFAULT_GRAPH_PAD_TOKEN])[
-            #     0
-            # ]
-            # self.qformer.resize_token_embeddings(len(encoder_tokenizer))
+            self.projector = nn.Linear(self.qformer.roberta_config.hidden_size, self.llm.config.hidden_size)
+            self.ln_norm = nn.LayerNorm(self.llm.config.hidden_size)
 
             if args.qformer.ckpt_path is not None and not args.qformer.skip_encoder:
                 logger.info(f"loading qformer ckpt from {args.qformer.ckpt_path}")
 
-                only_load_grpah_encoder = False
-                if only_load_grpah_encoder:
-                    state_dict = torch.load(os.path.join(args.qformer.ckpt_path, "Qformer.bin"))
-                    prefix = 'graph_encoder.'
-                    state_dict = {k[len(prefix):]:v for k,v in state_dict.items() if k.startswith(prefix)}
-
-                    self.qformer.graph_encoder.load_state_dict(state_dict)
-                else:
-                    self.qformer.load_state_dict(
-                        torch.load(os.path.join(args.qformer.ckpt_path, "Qformer.bin")),
-                        strict=False
-                    )
+                self.qformer.load_state_dict(
+                    torch.load(os.path.join(args.qformer.ckpt_path, "Qformer.bin")),
+                    strict=False
+                )
 
             self.qformer = self.qformer.to(kwargs["torch_dtype"])
         else:
             self.qformer = None
-
-        if not args.qformer.pretraining:
-            # llm is not used in qformer pretraining
-            self.llm: AutoModelForCausalLM = AutoModelForCausalLM.from_pretrained(
-                args.llm.model_name_or_path, attn_implementation=args.llm.attn_implementation, **kwargs
-            )
-            self.init_tokenizer_and_embeds(llm_tokenizer, encoder_tokenizer, DEFAULT_GRAPH_PAD_TOKEN)
-
-            if args.llm.finetuning_type == "full":
-                self.llm.requires_grad_(True)
-            elif args.llm.finetuning_type == "lora":
-                if args.llm.ckpt_path is not None:
-                    logger.info(f"loading lora ckpt from {args.llm.ckpt_path}")
-                    self.llm.load_adapter(args.llm.ckpt_path)
-                else:
-                    logger.info("adding lora model")
-                    peft_config = LoraConfig(
-                        task_type=TaskType.CAUSAL_LM,
-                        inference_mode=False,
-                        target_modules=args.llm.target_modules.split(","),
-                        r=args.llm.r,
-                        lora_alpha=args.llm.lora_alpha,
-                        lora_dropout=args.llm.lora_dropout,
-                    )
-                    self.llm = get_peft_model(self.llm, peft_config)
-                    self.llm.print_trainable_parameters()
-            elif args.llm.finetuning_type == "freeze":
-                self.llm.requires_grad_(False)
-            else:
-                raise NotImplementedError
-        else:
-            # dummy property
-            from easydict import EasyDict
-            self.llm = EasyDict({
-                    "generation_config": None,
-            })
 
     @property
     def config(self):
@@ -498,7 +323,7 @@ class StructQformerLLM(nn.Module):
         self.llm.generation_config = value
 
     def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs):
-        self.llm.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        self.llm.gradient_checkpointing_enable()
 
     def init_tokenizer_and_embeds(
         self,
@@ -513,41 +338,26 @@ class StructQformerLLM(nn.Module):
         self.llm_pad_token_id = llm_tokenizer.pad_token_id
         llm.resize_token_embeddings(len(llm_tokenizer))
 
-    def print_trainable_params(self):
-        trainable_params = 0
-        all_param = 0
-
-        for name, param in self.named_parameters():
-            num_params = param.numel()
-
-            all_param += num_params
-            if param.requires_grad:
-                # print(name, param.shape, num_params)
-                trainable_params += num_params
-
-        print(f"{trainable_params} / {all_param}, {trainable_params*100/all_param}%")
-        return trainable_params, all_param
-
     def construct_inputs_embeds(self, input_ids, qformer_inputs):
         inputs_embeds = self.llm.get_input_embeddings()(input_ids)
         batch_size = inputs_embeds.shape[0]
 
-        if self.num_query_tokens > 0:
-            res_embeds = self.qformer(qformer_inputs, self.llm, self.llm_graph_pad_token_id).to(inputs_embeds.dtype)
+        query_embeds = self.qformer.gen_query_embeds(qformer_inputs, self.llm, self.llm_graph_pad_token_id).to(inputs_embeds.dtype)
 
-            graph_pad_st_idx = torch.argmax((input_ids == self.llm_graph_pad_token_id).int(), dim=1)
-            graph_pad_ed_idx = graph_pad_st_idx + self.num_query_tokens
+        res_embeds = self.projector(query_embeds)
+        res_embeds = self.ln_norm(res_embeds)
 
-            new_inputs_embeds = torch.zeros_like(inputs_embeds, dtype=inputs_embeds.dtype, device=inputs_embeds.device)
-            for i in range(batch_size):
-                cur_inputs_embeds = inputs_embeds[i]
-                cur_graph_pad_st_idx, cur_graph_pad_ed_idx = graph_pad_st_idx[i], graph_pad_ed_idx[i]
+        graph_pad_st_idx = torch.argmax((input_ids == self.llm_graph_pad_token_id).int(), dim=1)
+        graph_pad_ed_idx = graph_pad_st_idx + self.num_query_tokens
 
-                new_inputs_embeds[i][:cur_graph_pad_st_idx] += cur_inputs_embeds[:cur_graph_pad_st_idx]
-                new_inputs_embeds[i][cur_graph_pad_st_idx:cur_graph_pad_ed_idx] += res_embeds[i]
-                new_inputs_embeds[i][cur_graph_pad_ed_idx:] += cur_inputs_embeds[cur_graph_pad_ed_idx:]
-        else:
-            new_inputs_embeds = inputs_embeds
+        new_inputs_embeds = torch.zeros_like(inputs_embeds, dtype=inputs_embeds.dtype, device=inputs_embeds.device)
+        for i in range(batch_size):
+            cur_inputs_embeds = inputs_embeds[i]
+            cur_graph_pad_st_idx, cur_graph_pad_ed_idx = graph_pad_st_idx[i], graph_pad_ed_idx[i]
+
+            new_inputs_embeds[i][:cur_graph_pad_st_idx] += cur_inputs_embeds[:cur_graph_pad_st_idx]
+            new_inputs_embeds[i][cur_graph_pad_st_idx:cur_graph_pad_ed_idx] += res_embeds[i]
+            new_inputs_embeds[i][cur_graph_pad_ed_idx:] += cur_inputs_embeds[cur_graph_pad_ed_idx:]
 
         return new_inputs_embeds
 
@@ -565,14 +375,24 @@ class StructQformerLLM(nn.Module):
         output_hidden_states: bool | None = None,
         return_dict: bool | None = None,
     ):
-        if self.args.qformer.pretraining:
-            outputs = self.qformer.pretrain_forward(qformer_inputs)
-        else:
+        if self.num_query_tokens > 0:
             inputs_embeds = self.construct_inputs_embeds(input_ids, qformer_inputs)
 
             outputs = self.llm(
                 input_ids=None,
                 inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                labels=labels,
+                use_cache=use_cache,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+            )
+        else:
+            outputs = self.llm(
+                input_ids=input_ids,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
                 past_key_values=past_key_values,

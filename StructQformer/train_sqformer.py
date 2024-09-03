@@ -15,7 +15,7 @@ from transformers import (
     set_seed,
     EarlyStoppingCallback,
 )
-from StructQformer.models import StructQformerLLM
+from StructQformer.models import StructQformerLLM, StructQformer
 from StructQformer.SQformer_dataset_hytrel import (
     DEFAULT_GRAPH_PAD_TOKEN,
     DataCollatorForGenerating,
@@ -41,32 +41,10 @@ from SQformerTrainer import (
 import wandb
 import numpy as np
 from collections import OrderedDict
-from utils.utils import load_jsonl
+from utils.utils import load_jsonl, print_trainable_params
 
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class ModelArguments:
-    model_name_or_path: Optional[str] = field(default="meta-llama/Llama-2-7b-hf")
-    # model_name_or_path: Optional[str] = field(default="/home/yaoxu/StructLM/models/ckpts/StructLM-7B")
-    encoder_model_path: Optional[str] = field(default="google-bert/bert-base-uncased")
-    num_query_tokens: int = field(default=10)
-    cross_attention_freq: int = field(default=1)
-
-    encoder_finetuning_type: str = field(default="freeze_plm")
-
-    finetuning_type: str = field(default="freeze_backbone")
-    target_modules: str = field(default="q_proj,v_proj")
-
-    strategy: str = field(default="pt")
-
-    skip_encoder: bool = field(default=False)
-
-    ckpt_path: str = field(default=None)
-
-    attn_implementation: str = field(default="flash_attention_2")
 
 
 @dataclass
@@ -82,9 +60,6 @@ class WarppedTrainingArguments(TrainingArguments):
     cfg: str = field(default="qformer/v3.cfg")
 
     output_dir: str = field(default="trainer_outputs")
-
-    # to avoid Warning
-    optim: str = field(default="adamw_torch")
 
     flash_attn: Optional[bool] = field(default=False)
 
@@ -147,6 +122,7 @@ if __name__ == "__main__":
 
     llm_tokenizer = AutoTokenizer.from_pretrained(model_args.llm.model_name_or_path, use_fast=False)
     if llm_tokenizer.pad_token is None:
+        # for llama model
         llm_tokenizer.pad_token = llm_tokenizer.eos_token
         
     encoder_tokenizer = AutoTokenizer.from_pretrained(model_args.qformer.model_name_or_path, use_fast=False)
@@ -163,32 +139,20 @@ if __name__ == "__main__":
         }
     )
 
-    model = StructQformerLLM(
-        model_args,
-        hypergraph_enc_config,
-        llm_tokenizer,
-        encoder_tokenizer,
-        use_cache=False if training_args.gradient_checkpointing else True,
-        torch_dtype=torch_dtype,
-    )
-
-    # for name, module in model.named_modules():
-    #     if isinstance(module, LoraLayer):
-    #         if training_args.bf16:
-    #             module = module.to(torch.bfloat16)
-    #         if training_args.fp16:
-    #             module = module.to(torch.float16)
-    #     if "norm" in name:
-    #         module = module.to(torch.float16)
-    #     if "lm_head" in name or "embed_tokens" in name:
-    #         if hasattr(module, "weight"):
-    #             if training_args.bf16 and module.weight.dtype == torch.float32:
-    #                 module = module.to(torch.bfloat16)
-    #             if training_args.fp16 and module.weight.dtype == torch.float32:
-    #                 module = module.to(torch.float16)
+    if model_args.qformer.pretraining:
+        model = StructQformer(model_args, hypergraph_enc_config)
+    else:
+        model = StructQformerLLM(
+            model_args,
+            hypergraph_enc_config,
+            llm_tokenizer,
+            encoder_tokenizer,
+            use_cache=False if training_args.gradient_checkpointing else True,
+            torch_dtype=torch_dtype,
+        )
 
     if training_args.should_log:
-        model.print_trainable_params()
+        print_trainable_params(model)
 
     dataset_dir = pathlib.Path(training_args.dataset_dir)
 
@@ -246,16 +210,6 @@ if __name__ == "__main__":
         # compute_metrics=compute_metrics,
     )
 
-    # callback = PredictionProgressCallback(
-    #     trainer, llm_tokenizer, encoder_tokenizer, test_dataset, test_examples)
-    # trainer.add_callback(callback)
-
-    if 'pretraining' not in str(dataset_dir): 
-        # do not early stop in pretraining
-        early_stopping_callback = EarlyStoppingCallback(early_stopping_patience=3)
-        trainer.add_callback(early_stopping_callback)
-        latest_checkpoint = None
-        
     # 检查是否存在 checkpoints
     if os.path.exists(training_args.output_dir):
         checkpoints = [os.path.join(training_args.output_dir, d) for d in os.listdir(training_args.output_dir) if d.startswith("checkpoint-")]

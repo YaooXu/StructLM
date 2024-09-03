@@ -248,45 +248,17 @@ class GraphDataset(Dataset):
     def __getitem__(self, index):
         sample = self.raw_dataset[index]
 
-        if self.num_query_tokens > 0:
-            sample['input'] = sample['input'].replace('[GRAPH_PAD]', \
-                f'\n\nstruct data representation tokens: {DEFAULT_GRAPH_PAD_TOKEN * self.num_query_tokens}\n\n\n')
-        else:
-            sample['input'] = sample['input'].replace('[GRAPH_PAD]', \
-                '\n\n\n')
-                
-        # llm input and target
-        tokenized_input = self.llm_tokenizer(
-            sample['input'], return_attention_mask=False, add_special_tokens=False
-        )
-
-        target = f"{sample['label']}"
-        tokenized_target = self.llm_tokenizer(
-            target, return_attention_mask=False, add_special_tokens=False
-        )
-        s = [self.llm_tokenizer.bos_token_id] + tokenized_input["input_ids"]
-        t = tokenized_target["input_ids"] + [self.llm_tokenizer.eos_token_id]
-
-        if self.training:
-            input_ids = torch.LongTensor(s + t)[:self.max_seq_length]
-            labels = torch.LongTensor([IGNORE_INDEX] * len(s) + t)[:self.max_seq_length]
-        else:
-            input_ids = torch.LongTensor(s)[:self.max_seq_length]
-            labels = torch.LongTensor([IGNORE_INDEX] * len(s))[:self.max_seq_length]
-
-
         # qformer input and target (for pretraining)
-        question = sample['question']
-        tokenized_input = self.encoder_tokenizer(question, return_attention_mask=False, add_special_tokens=False)
-        tokenized_target = self.encoder_tokenizer(target, return_attention_mask=False, add_special_tokens=False)
+        tokenized_input = self.encoder_tokenizer(sample['question'], return_attention_mask=False, add_special_tokens=False)
+        tokenized_target = self.encoder_tokenizer(sample['label'], return_attention_mask=False, add_special_tokens=False)
         s = [self.encoder_tokenizer.bos_token_id] + tokenized_input["input_ids"]
         t = tokenized_target["input_ids"] + [self.encoder_tokenizer.eos_token_id]
         if self.sqformer_pretraining:
-            qformer_input_ids = torch.LongTensor(s + t)[:500]
-            qformer_labels = torch.LongTensor([IGNORE_INDEX] * len(s) + t)[:500]
+            qformer_input_ids = torch.LongTensor(s + t)[:512]
+            qformer_labels = torch.LongTensor([IGNORE_INDEX] * len(s) + t)[:512]
         else:
-            qformer_input_ids = torch.LongTensor(s)[:500]
-            qformer_labels = torch.LongTensor([IGNORE_INDEX] * len(s))[:500]
+            qformer_input_ids = torch.LongTensor(s)[:512]
+            qformer_labels = torch.LongTensor([IGNORE_INDEX] * len(s))[:512]
 
         try:
             with zipfile.ZipFile(sample['graph_path'][0], 'r') as zipf:
@@ -305,12 +277,43 @@ class GraphDataset(Dataset):
             "input_ids": qformer_input_ids,
             "labels": qformer_labels,
         }
-
         item = {
-            "input_ids": input_ids,
-            "labels": labels,
             "qformer_input": qformer_input,
         }
+        if self.sqformer_pretraining:
+            return item
+
+        assert '[GRAPH_PAD]' in sample['input']
+        if self.num_query_tokens > 0:
+            sample['input'] = sample['input'].replace('[GRAPH_PAD]', \
+                f'\n\nstruct data representation tokens: {DEFAULT_GRAPH_PAD_TOKEN * self.num_query_tokens}\n\n\n')
+        else:
+            sample['input'] = sample['input'].replace('[GRAPH_PAD]', \
+                '\n\n\n')
+                
+        # llm input and target
+        tokenized_input = self.llm_tokenizer(
+            sample['input'], return_attention_mask=False, add_special_tokens=False
+        )
+
+        tokenized_target = self.llm_tokenizer(
+            sample['label'], return_attention_mask=False, add_special_tokens=False
+        )
+        s = [self.llm_tokenizer.bos_token_id] + tokenized_input["input_ids"]
+        t = tokenized_target["input_ids"] + [self.llm_tokenizer.eos_token_id]
+
+        if self.training:
+            input_ids = torch.LongTensor(s + t)[:self.max_seq_length]
+            labels = torch.LongTensor([IGNORE_INDEX] * len(s) + t)[:self.max_seq_length]
+        else:
+            input_ids = torch.LongTensor(s)[:self.max_seq_length]
+            labels = torch.LongTensor([IGNORE_INDEX] * len(s))[:self.max_seq_length]
+
+        item.update({
+            "input_ids": input_ids,
+            "labels": labels,
+        })
+
         return item
 
     def select(self, idxes):
@@ -371,6 +374,10 @@ class DataCollatorForGraphSupervisedDataset(object):
         batch = {
             'qformer_inputs': qformer_inputs
         } 
+
+        if "input_ids" not in instances[0]:
+            # qformer pretraining
+            return batch
 
         # LLM input
         input_ids, labels = tuple(

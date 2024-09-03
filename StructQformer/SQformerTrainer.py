@@ -413,9 +413,9 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
             _state_dict = model_to_save.state_dict()
 
         output_state_dict = {
-            k.partition("qformer.")[-1]: _state_dict[k] for k in _state_dict if "qformer" in k
+            k: _state_dict[k] for k in _state_dict if not k.startswith('llm')
         }
-        torch.save(output_state_dict, os.path.join(output_dir, "Qformer.bin"))
+        torch.save(output_state_dict, os.path.join(output_dir, "model.bin"))
 
         if self.tokenizer is not None:
             self.tokenizer.save_pretrained(output_dir)

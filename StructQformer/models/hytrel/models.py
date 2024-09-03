@@ -25,44 +25,8 @@ class Embedding(nn.Module):
     # self.dropout = nn.Dropout(config.hidden_dropout_prob)
     self.proj = nn.Linear(1024, config.hidden_size)
     self.llm_pad_token_id = config.llm_pad_token_id
-  
-  # @torch.no_grad
-  # def get_embeds(self, llm, input_ids, step=100):
-  #   llm.eval()
-  #   llm.disable_adapter_layers()
     
-  #   attention_mask = torch.ne(input_ids, self.llm_pad_token_id).to(input_ids.device)
-  #   num_nodes = input_ids.shape[0]
-    
-  #   all_embeddings = []
-  #   for i in range(0, num_nodes, step)
-  #     embeddings = llm(input_ids, attention_mask=attention_mask, output_hidden_states=True)['hidden_states'][-1]
-      
-  #   llm.enable_adapter_layers()
-  #   llm.train()
   def forward(self, x_s, x_t):
-    # llm.disable_adapter_layers()
-    
-    # is_train = False
-    # if llm.training:
-    #   llm.eval()
-    #   is_train = True
-      
-    # with torch.no_grad():
-      
-    #   input_ids = x_s
-    #   attention_mask = torch.ne(input_ids, self.llm_pad_token_id).to(input_ids.device)
-    #   embedding_s = llm(input_ids, attention_mask=attention_mask, output_hidden_states=True)['hidden_states'][-1]
-    #   embedding_s = torch.sum(embedding_s * attention_mask.unsqueeze(-1), 1) / attention_mask.sum(dim=-1, keepdim=True)
-
-    #   input_ids = x_t
-    #   attention_mask = torch.ne(input_ids, self.llm_pad_token_id).to(input_ids.device)
-    #   embedding_t = llm(input_ids, attention_mask=attention_mask, output_hidden_states=True)['hidden_states'][-1]
-    #   embedding_t = torch.sum(embedding_t * attention_mask.unsqueeze(-1), 1) / attention_mask.sum(dim=-1, keepdim=True)
-      
-    # llm.enable_adapter_layers()
-    # if is_train:
-    #   llm.train()
     x_s = x_s.to(self.proj.weight.dtype)
     x_t = x_t.to(self.proj.weight.dtype)
       

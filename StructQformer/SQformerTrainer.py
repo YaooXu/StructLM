@@ -44,6 +44,8 @@ from transformers.utils import is_peft_available, WEIGHTS_NAME
 from peft import PeftModel
 from eval_json import eval_loose_json
 
+import shutil
+
 sys.path.append("./src")
 
 
@@ -422,3 +424,7 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
 
         # Good practice: save your training arguments together with the trained model
         torch.save(self.args, os.path.join(output_dir, TRAINING_ARGS_NAME))
+
+        # save cfg
+        cfg_name = os.path.basename(self.model.args.cfg_path)
+        shutil.copy(self.model.args.cfg_path, os.path.join(output_dir, cfg_name))

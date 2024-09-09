@@ -104,48 +104,18 @@ class RobertaEmbeddings(nn.Module):
         past_key_values_length=0,
         token_type_ids=None,
     ):
-        # if position_ids is None:
-        #     if input_ids is not None:
-        #         # Create the position ids from the input token ids. Any padded tokens remain padded.
-        #         position_ids = create_position_ids_from_input_ids(input_ids, self.padding_idx, past_key_values_length)
-        #     else:
-        #         # TODO: xuyao, query tokens do not use position embeddings
-        #         position_ids = self.create_position_ids_from_inputs_embeds(query_embeds)
-
-        # if input_ids is not None:
-        #     input_shape = input_ids.size()
-        # else:
-        #     input_shape = query_embeds.size()[:-1]
-
-        # if input_ids is not None:
-        #     embeddings = self.word_embeddings(input_ids)
-        #     if self.position_embedding_type == "absolute":
-        #         position_embeddings = self.position_embeddings(position_ids)
-        #         embeddings = embeddings + position_embeddings
-
-        #     if query_embeds is not None:
-        #         embeddings = torch.cat((query_embeds, embeddings), dim=1)
-        # else:
-        #     embeddings = query_embeds
-
-        # embeddings = self.LayerNorm(embeddings)
-        # embeddings = self.dropout(embeddings)
-        # return embeddings
-
-        # original embeddings
-        inputs_embeds = query_embeds
-
         if position_ids is None:
             if input_ids is not None:
                 # Create the position ids from the input token ids. Any padded tokens remain padded.
                 position_ids = create_position_ids_from_input_ids(input_ids, self.padding_idx, past_key_values_length)
             else:
-                position_ids = self.create_position_ids_from_inputs_embeds(inputs_embeds)
+                # TODO: xuyao, query tokens do not use position embeddings
+                position_ids = self.create_position_ids_from_inputs_embeds(query_embeds)
 
         if input_ids is not None:
             input_shape = input_ids.size()
         else:
-            input_shape = inputs_embeds.size()[:-1]
+            input_shape = query_embeds.size()[:-1]
 
         seq_length = input_shape[1]
 
@@ -160,15 +130,24 @@ class RobertaEmbeddings(nn.Module):
             else:
                 token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=self.position_ids.device)
 
-        if inputs_embeds is None:
-            inputs_embeds = self.word_embeddings(input_ids)
 
-        token_type_embeddings = self.token_type_embeddings(token_type_ids)
+        if input_ids is not None:
+            embeddings = self.word_embeddings(input_ids)
 
-        embeddings = inputs_embeds + token_type_embeddings
-        if self.position_embedding_type == "absolute":
-            position_embeddings = self.position_embeddings(position_ids)
-            embeddings += position_embeddings
+            # token type
+            token_type_embeddings = self.token_type_embeddings(token_type_ids)
+            embeddings = embeddings + token_type_embeddings
+
+            # position
+            if self.position_embedding_type == "absolute":
+                position_embeddings = self.position_embeddings(position_ids)
+                embeddings = embeddings + position_embeddings
+
+            if query_embeds is not None:
+                embeddings = torch.cat((query_embeds, embeddings), dim=1)
+        else:
+            embeddings = query_embeds
+
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings
@@ -262,15 +241,8 @@ class RobertaSelfAttention(nn.Module):
         query_layer = self.transpose_for_scores(mixed_query_layer)
 
         use_cache = past_key_value is not None
-        if self.is_decoder:
-            # if cross_attention save Tuple(torch.Tensor, torch.Tensor) of all cross attention key/value_states.
-            # Further calls to cross_attention layer can then reuse all cross-attention
-            # key/value_states (first "if" case)
-            # if uni-directional self-attention (decoder) save Tuple(torch.Tensor, torch.Tensor) of
-            # all previous decoder key/value_states. Further calls to uni-directional self-attention
-            # can concat previous decoder key/value_states to current projected key/value_states (third "elif" case)
-            # if encoder bi-directional self-attention `past_key_value` is always `None`
-            past_key_value = (key_layer, value_layer)
+        
+        past_key_value = (key_layer, value_layer)
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
         attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))

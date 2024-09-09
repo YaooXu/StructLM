@@ -54,7 +54,7 @@ class Dart(datasets.GeneratorBasedBuilder):
             description=_DESCRIPTION,
             features=datasets.Features(
                 {
-                    "tripleset": datasets.Sequence(datasets.Sequence(datasets.Value("string"))),
+                    "kg_tuples": datasets.Sequence(datasets.Sequence(datasets.Value("string"))),
                     "subtree_was_extended": datasets.Value("bool"),
                     "annotations": datasets.Sequence(
                         {
@@ -87,12 +87,24 @@ class Dart(datasets.GeneratorBasedBuilder):
     def _generate_examples(self, filepath):
         with open(filepath, encoding="utf-8") as f:
             data = json.loads(f.read())
+            n = 0
             for example_idx, example in enumerate(data):
-                yield example_idx, {
-                    "tripleset": example["tripleset"],
-                    "subtree_was_extended": example.get("subtree_was_extended", None),  # some are missing
-                    "annotations": {
-                        "source": [annotation["source"] for annotation in example["annotations"]],
-                        "text": [annotation["text"] for annotation in example["annotations"]],
-                    },
-                }
+                for annotation in example["annotations"]:
+                    yield n, {
+                        "kg_tuples": example["tripleset"],
+                        "subtree_was_extended": example.get("subtree_was_extended", None),  # some are missing
+                        "annotations": {
+                            "source": [annotation["source"]],
+                            "text": [annotation["text"]],
+                        },
+                    } 
+                    n += 1     
+
+                # yield example_idx, {
+                #     "tripleset": example["tripleset"],
+                #     "subtree_was_extended": example.get("subtree_was_extended", None),  # some are missing
+                #     "annotations": {
+                #         "source": [annotation["source"] for annotation in example["annotations"]],
+                #         "text": [annotation["text"] for annotation in example["annotations"]],
+                #     },
+                # }

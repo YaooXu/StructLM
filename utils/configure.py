@@ -73,6 +73,7 @@ class Configure(object):
         :return: configure args
         """
         cfgargs = Args()
+        cfgargs.cfg_path = file
         parser = configparser.ConfigParser()
         parser.read(file)
         for section in parser.sections():

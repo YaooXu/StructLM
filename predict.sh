@@ -13,7 +13,7 @@ max_seq_length=2560
 num_train_epochs=3
 lr=2e-5
 wd=0.05
-master_port=29503
+master_port=29501
 strategy=v2.6
 num_query_tokens=10
 cross_attention_freq=1
@@ -21,20 +21,20 @@ finetuning_type=freeze_backbone
 
 wandb online
 
-dataset_dir=data/hytrel/wikitq
+dataset_dir=data/hytrel/all-table-kg-tasks
 
 llm=llama
 
 gas=8
 
-for cfg in hytrel/v2-predict.cfg ; do
+for cfg in hytrel/v2-predict2.cfg ; do
 
     echo ${cfg}
 
     export WANDB_PROJECT=$(basename "$dataset_dir")
 
         # --gradient_checkpointing \
-    deepspeed --master_port=${master_port} StructQformer/train_sqformer.py \
+    deepspeed --master_port=${master_port} --include=localhost:4,5,6,7 StructQformer/train_sqformer.py \
         --do_predict \
         --bf16 \
         --cfg=${cfg} \

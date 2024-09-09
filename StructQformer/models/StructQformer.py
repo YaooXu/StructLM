@@ -100,8 +100,10 @@ class StructQformer(nn.Module):
             self.roberta_config.add_cross_attention = True
             self.roberta_config.is_decoder = True
             self.roberta_config.query_length = self.num_query_tokens
+            self.roberta_config.encoder_width = self.args.hytrel.hidden_size
 
             from .Qformer_roberta import RobertaForCausalLM
+            # from .Qformer_roberta_ori import RobertaForCausalLM
             self.model = RobertaForCausalLM.from_pretrained(
                 args.qformer.model_name_or_path, config=self.roberta_config,
             )
@@ -138,33 +140,36 @@ class StructQformer(nn.Module):
         question_attention_mask = qformer_inputs["attention_mask"]
         batch_size = question_ids.shape[0]
 
-        if self.args.skip_graph_encoder:
+        if self.args.qformer.skip_graph_encoder:
             query_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
         else:
-            all_graph_embeds = self.graph_encoder(qformer_inputs["graphs"])
+            if self.args.qformer.without_gnn:
+                graph_embeds, graph_attention_mask = None, None
+            else:
+                all_graph_embeds = self.graph_encoder(qformer_inputs["graphs"])
 
-            x_s_idxes = qformer_inputs["graphs"]["x_s_ptr"].tolist()
-            # x_t_idxes = graph["graphs"]["x_t_ptr"].tolist()
-            list_graph_embeds = []
-            list_graph_attn = []
-            for i in range(len(x_s_idxes) - 1):
-                graph_embeds = torch.cat(
-                    [
-                        all_graph_embeds[0][x_s_idxes[i] : x_s_idxes[i + 1], :],  # s_nodes
-                        # all_graph_embeds[1][x_t_idxes[i] : x_t_idxes[i + 1], :],  # t_nodes
-                    ],
-                    dim=0
-                )
-                list_graph_embeds.append(graph_embeds)
-                list_graph_attn.append(torch.LongTensor([1] * graph_embeds.shape[0]))
-            graph_embeds = torch.nn.utils.rnn.pad_sequence(list_graph_embeds, batch_first=True)
-            graph_attention_mask = torch.nn.utils.rnn.pad_sequence(list_graph_attn, batch_first=True).to(graph_embeds.device)
+                x_s_idxes = qformer_inputs["graphs"]["x_s_ptr"].tolist()
+                # x_t_idxes = graph["graphs"]["x_t_ptr"].tolist()
+                list_graph_embeds = []
+                list_graph_attn = []
+                for i in range(len(x_s_idxes) - 1):
+                    graph_embeds = torch.cat(
+                        [
+                            all_graph_embeds[0][x_s_idxes[i] : x_s_idxes[i + 1], :],  # s_nodes
+                            # all_graph_embeds[1][x_t_idxes[i] : x_t_idxes[i + 1], :],  # t_nodes
+                        ],
+                        dim=0
+                    )
+                    list_graph_embeds.append(graph_embeds)
+                    list_graph_attn.append(torch.LongTensor([1] * graph_embeds.shape[0]))
+                graph_embeds = torch.nn.utils.rnn.pad_sequence(list_graph_embeds, batch_first=True)
+                graph_attention_mask = torch.nn.utils.rnn.pad_sequence(list_graph_attn, batch_first=True).to(graph_embeds.device)
 
-            graph_embeds = self.projector1(graph_embeds)
-            graph_embeds = self.ln_norm1(graph_embeds)
+                # graph_embeds = self.projector1(graph_embeds)
+                graph_embeds = self.ln_norm1(graph_embeds)
 
             query_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
-            query_atts = torch.ones(query_embeds.shape[:-1]).to(graph_embeds.device)
+            query_atts = torch.ones(query_embeds.shape[:-1]).to(query_embeds.device)
             
             # inputs_embeds = query_embeds
             # attention_mask = query_atts
@@ -185,6 +190,14 @@ class StructQformer(nn.Module):
                 query_embeds=query_embeds, 
                 only_query_embeds=self.args.qformer.only_query_embeds
             )
+
+            # query_output = self.model.roberta(
+            #     query_embeds=query_embeds, 
+            #     encoder_hidden_states=graph_embeds,
+            #     encoder_attention_mask=graph_attention_mask,
+            #     use_cache=True,
+            #     return_dict=True,
+            # )
 
             query_embeds = query_output.last_hidden_state[:, :self.num_query_tokens, :]
 
@@ -221,7 +234,7 @@ class StructQformer(nn.Module):
         graph_embeds = torch.nn.utils.rnn.pad_sequence(list_graph_embeds, batch_first=True)
         graph_attention_mask = torch.nn.utils.rnn.pad_sequence(list_graph_attn, batch_first=True).to(graph_embeds.device)
 
-        graph_embeds = self.projector1(graph_embeds)
+        # graph_embeds = self.projector1(graph_embeds)
         graph_embeds = self.ln_norm1(graph_embeds)
 
         query_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
@@ -234,6 +247,22 @@ class StructQformer(nn.Module):
             encoder_attention_mask=graph_attention_mask,
             labels=qformer_inputs["labels"],
         )
+
+        # query_output = self.model.roberta(
+        #     query_embeds=query_embeds, 
+        #     encoder_hidden_states=graph_embeds,
+        #     encoder_attention_mask=graph_attention_mask,
+        #     use_cache=True,
+        #     return_dict=True,
+        # )
+
+        # attention_mask = torch.cat([query_atts, attention_mask], dim=1)
+        # outputs = self.model(
+        #     input_ids=input_ids,
+        #     attention_mask=attention_mask,
+        #     past_key_values=query_output.past_key_values,
+        #     labels=qformer_inputs["labels"],
+        # )
 
         return outputs
 
@@ -298,17 +327,26 @@ class StructQformerLLM(nn.Module):
             self.projector = nn.Linear(self.qformer.roberta_config.hidden_size, self.llm.config.hidden_size)
             self.ln_norm = nn.LayerNorm(self.llm.config.hidden_size)
 
-            if args.qformer.ckpt_path is not None and not args.qformer.skip_encoder:
+            if args.qformer.ckpt_path is not None and not args.qformer.skip_graph_encoder:
                 logger.info(f"loading qformer ckpt from {args.qformer.ckpt_path}")
 
+                state_dict = torch.load(args.qformer.ckpt_path)
+                state_dict = {k:v for k,v in state_dict.items() if 'query_token_embeds' not in k}
                 self.qformer.load_state_dict(
-                    torch.load(os.path.join(args.qformer.ckpt_path, "Qformer.bin")),
+                    state_dict,
                     strict=False
                 )
 
             self.qformer = self.qformer.to(kwargs["torch_dtype"])
         else:
             self.qformer = None
+
+        if args.llm.ckpt_path is not None:
+            self.load_state_dict(
+                torch.load(os.path.join(args.llm.ckpt_path, "model.bin")),
+                strict=False
+            )
+            self.to(kwargs["torch_dtype"])
 
     @property
     def config(self):
@@ -420,15 +458,25 @@ class StructQformerLLM(nn.Module):
         return_dict: bool | None = None,
         **gen_kwargs,
     ):
-        inputs_embeds = self.construct_inputs_embeds(input_ids, qformer_inputs)
+        if self.num_query_tokens > 0:
+            inputs_embeds = self.construct_inputs_embeds(input_ids, qformer_inputs)
 
-        outputs = self.llm.generate(
-            inputs_embeds=inputs_embeds,
-            attention_mask=attention_mask,
-            labels=labels,
-            return_dict=True,
-            **gen_kwargs,
-        )
+            outputs = self.llm.generate(
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                labels=labels,
+                return_dict=True,
+                **gen_kwargs,
+            )
+        else:
+            outputs = self.llm.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels,
+                return_dict=True,
+                **gen_kwargs,
+            )
+            outputs = outputs[:, input_ids.shape[1]:]
 
         return outputs
 

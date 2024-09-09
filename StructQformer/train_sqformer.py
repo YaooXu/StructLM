@@ -76,25 +76,6 @@ class WarppedTrainingArguments(TrainingArguments):
     disable_tqdm: bool = False
 
 
-# to load state dict of hytrel
-@dataclass
-class OptimizerConfig:
-    batch_size: int = 256
-    base_learning_rate: float = 1e-3
-    weight_decay: float = 0.02
-    adam_beta1: float = 0.9
-    adam_beta2: float = 0.98
-    adam_epsilon: float = 1e-5
-    lr_scheduler_type: transformers.SchedulerType = "linear"
-    warmup_step_ratio: float = 0.1
-    seed: int = 42
-    optimizer: str = "Adam"
-    adam_w_mode: bool = True
-    save_every_n_epochs: int = 1
-    save_top_k: int = 1
-    checkpoint_path: str = ""
-
-
 if __name__ == "__main__":
     parser = transformers.HfArgumentParser((WarppedTrainingArguments))
     (training_args,) = parser.parse_args_into_dataclasses()
@@ -130,7 +111,6 @@ if __name__ == "__main__":
     hypergraph_enc_config = AutoConfig.from_pretrained(model_args.qformer.model_name_or_path)
     hypergraph_enc_config.update(
         {
-            "num_hidden_layers": 12,
             "vocab_size": len(encoder_tokenizer),
             "pre_norm": False,
             "activation_dropout": 0.1,
@@ -138,6 +118,9 @@ if __name__ == "__main__":
             "llm_pad_token_id": llm_tokenizer.pad_token_id if llm_tokenizer.pad_token_id else llm_tokenizer.eos_token_id,
         }
     )
+
+    if model_args.hytrel:
+        hypergraph_enc_config.update({k:v for k,v in model_args.hytrel})
 
     if model_args.qformer.pretraining:
         model = StructQformer(model_args, hypergraph_enc_config)
@@ -193,7 +176,6 @@ if __name__ == "__main__":
 
     # if "debug" in training_args.output_dir:
     #     test_dataset = test_dataset.select(random.sample(range(len(test_dataset)), k=1000))
-    #     eval_dataset = eval_dataset.select(random.sample(range(len(test_dataset)), k=1000))
 
     data_collator = DataCollatorForGraphSupervisedDataset(llm_tokenizer, encoder_tokenizer)
 
@@ -210,21 +192,21 @@ if __name__ == "__main__":
         # compute_metrics=compute_metrics,
     )
 
-    # 检查是否存在 checkpoints
-    if os.path.exists(training_args.output_dir):
-        checkpoints = [os.path.join(training_args.output_dir, d) for d in os.listdir(training_args.output_dir) if d.startswith("checkpoint-")]
-    else:
-        checkpoints = None
-
-    # 如果存在 checkpoints，则从最新的 checkpoint 恢复训练
-    if checkpoints:
-        latest_checkpoint = max(checkpoints, key=os.path.getctime)
-        print(f"Resuming from checkpoint: {latest_checkpoint}")
-    else:
-        latest_checkpoint = None
-        print("No checkpoints found. Starting a new training run.")
-
     if training_args.do_train:
+        # 检查是否存在 checkpoints
+        if os.path.exists(training_args.output_dir):
+            checkpoints = [os.path.join(training_args.output_dir, d) for d in os.listdir(training_args.output_dir) if d.startswith("checkpoint-")]
+        else:
+            checkpoints = None
+
+        # 如果存在 checkpoints，则从最新的 checkpoint 恢复训练
+        if checkpoints:
+            latest_checkpoint = max(checkpoints, key=os.path.getctime)
+            logging.info(f"Resuming from checkpoint: {latest_checkpoint}")
+        else:
+            latest_checkpoint = None
+            logging.info("No checkpoints found. Starting a new training run.")
+
         trainer.train(resume_from_checkpoint=latest_checkpoint)
 
     elif training_args.do_predict:

@@ -59,12 +59,12 @@ if __name__=="__main__":
     parser.add_argument("--dir", type=str, default=None)
     args = parser.parse_args()
     if args.json_file:
-        eval_loose_json(args)
+        eval_loose_json(args, record_results=True)
     elif args.dir:
         subfolders = [f for f in os.listdir(args.dir) if os.path.isdir(os.path.join(args.dir, f)) and f.startswith('test')]
         for f in reversed(subfolders):
             print(f)
             args.json_file = os.path.join(args.dir, f'{f}/predictions.json')
-            eval_loose_json(args) 
+            eval_loose_json(args, record_results=True) 
     else:
         main(args)

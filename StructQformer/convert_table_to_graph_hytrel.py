@@ -93,6 +93,97 @@ class BipartiteData(Data):
         else:
             return super().__inc__(key, value, *args, **kwargs)
 
+class GraphConverter:
+    def __init__(self, tokenizer) -> None:
+        self.tokenizer = tokenizer
+        self.data_args = EasyDict(
+            {
+                "max_token_length": 64,
+                "max_num_nodes": 400
+            }
+        )
+    
+    def _kg_tupels2graph(self, kg_tuples, return_dict=False):
+        s_nodes, t_nodes, edge_index = [], [], []
+
+        cap = "Graph Caption: "
+        s_nodes.append(cap)
+
+        name_to_node_id = {}
+        for kg_tuple in kg_tuples:
+            h, r, t = kg_tuple
+            h = f'Node: {h}'
+            r = f'Relation: {r}'
+            t = f'Node: {t}'
+
+            if h not in name_to_node_id:
+                if len(s_nodes) >= self.data_args.max_num_nodes:
+                    continue
+
+                name_to_node_id[h] = len(s_nodes)
+                s_nodes.append(h)
+
+                edge_index.append([name_to_node_id[h], 0])
+            h_node_idx = name_to_node_id[h]
+
+            if t not in name_to_node_id:
+                if len(s_nodes) >= self.data_args.max_num_nodes:
+                    continue
+
+                name_to_node_id[t] = len(s_nodes)
+                s_nodes.append(t)
+
+                edge_index.append([name_to_node_id[t], 0])
+            t_node_idx = name_to_node_id[t]           
+
+            # always add relation node
+            r_node_idx = len(t_nodes)
+            t_nodes.append(r)
+
+            edge_index.append([h_node_idx, r_node_idx])
+            edge_index.append([t_node_idx, r_node_idx])
+
+        wordpieces_xs_all = self.tokenizer(
+            s_nodes,
+            return_attention_mask=True,
+            padding="max_length",
+            truncation=True,
+            max_length=self.data_args.max_token_length,
+        )['input_ids']
+
+        wordpieces_xt_all = self.tokenizer(
+            t_nodes,
+            return_attention_mask=True,
+            padding="max_length",
+            truncation=True,
+            max_length=self.data_args.max_token_length,
+        )['input_ids']
+
+        col_mask = [0 for i in range(len(wordpieces_xt_all))]
+
+        edge_index = torch.tensor(edge_index, dtype=torch.long).T
+
+        if not return_dict:
+            bigraph = BipartiteData(
+                edge_index=edge_index,
+                x_s=torch.LongTensor(wordpieces_xs_all),
+                x_t=torch.LongTensor(wordpieces_xt_all),
+                col_mask=col_mask,
+                num_nodes=len(wordpieces_xs_all),
+                num_hyperedges=len(wordpieces_xt_all),
+            )
+        else:
+            bigraph = dict(
+                edge_index=edge_index.tolist(),
+                x_s=wordpieces_xs_all,
+                x_t=wordpieces_xt_all,
+                col_mask=col_mask,
+                num_nodes=len(wordpieces_xs_all),
+                num_hyperedges=len(wordpieces_xt_all),
+            )
+
+        return bigraph
+
 
 class TableConverter:
     def __init__(self, tokenizer) -> None:
@@ -100,42 +191,11 @@ class TableConverter:
         self.data_args = EasyDict(
             {
                 "max_token_length": 64,
-                "max_row_length": 30,
+                "max_row_length": 20,
                 "max_column_length": 20,
                 "electra": False,
             }
         )
-
-    # def _tokenize_word(self, word):
-    #     # refer to numBERT
-    #     number_pattern = re.compile(r"(\d+)\.?(\d*)")  # Matches numbers in decimal form.
-
-    #     def number_repl(matchobj):
-    #         """Given a matchobj from number_pattern, it returns a string writing the corresponding number in scientific notation."""
-    #         pre = matchobj.group(1).lstrip("0")
-    #         post = matchobj.group(2)
-    #         if pre and int(pre):
-    #             # number is >= 1
-    #             exponent = len(pre) - 1
-    #         else:
-    #             # find number of leading zeros to offset.
-    #             exponent = -re.search("(?!0)", post).start() - 1
-    #             post = post.lstrip("0")
-    #         return (pre + post).rstrip("0") + " scinotexp " + str(exponent)
-
-    #     def apply_scientific_notation(line):
-    #         """Convert all numbers in a line to scientific notation."""
-    #         res = re.sub(number_pattern, number_repl, line)
-    #         return res
-
-    #     # word = apply_scientific_notation(word)
-    #     wordpieces = self.tokenizer.tokenize(word)[: self.data_args.max_token_length]
-
-    #     mask = [1 for _ in range(len(wordpieces))]
-    #     while len(wordpieces) < self.data_args.max_token_length:
-    #         wordpieces.append("[PAD]")
-    #         mask.append(0)
-    #     return wordpieces, mask
 
     def _text2table(self, sample):
 
@@ -224,7 +284,7 @@ class TableConverter:
                 node_id = len(nodes)
                 nodes.append(node_id)
                 edge_index.append([node_id, 0])  # connect to table-level hyper-edge
-                edge_index.append([node_id, col_i + 1])  # # connect to col-level hyper-edge
+                edge_index.append([node_id, col_i + 1])  # connect to col-level hyper-edge
                 edge_index.append([node_id, row_i + 1 + len(header)])  # connect to row-level hyper-edge
 
         # add label
@@ -233,24 +293,6 @@ class TableConverter:
         col_mask = [0 for i in range(len(wordpieces_xt_all))]
         col_mask[1 : 1 + len(header)] = [1] * len(header)
 
-        # for col_i, lbl in enumerate(labels):
-        #     for lbl_i in lbl:
-        #         label_ids[col_i, lbl_i] = 1.0
-        #         pos_count[lbl_i] += 1
-
-        # xs_ids = torch.tensor([self.tokenizer.convert_tokens_to_ids(x) for x in wordpieces_xs_all], dtype=torch.long)
-        # xt_ids = torch.tensor([self.tokenizer.convert_tokens_to_ids(x) for x in wordpieces_xt_all], dtype=torch.long)
-
-        # with torch.no_grad():
-        #     output = llm(
-        #         torch.LongTensor(wordpieces_xt_all).to(llm.device), attention_mask=torch.LongTensor(mask_xt_all).to(llm.device)
-        #     )
-
-        # check all 0 input
-        # xs_tem = torch.count_nonzero(xs_ids, dim=1)
-        # xt_tem = torch.count_nonzero(xt_ids, dim=1)
-        # assert torch.count_nonzero(xs_tem) == len(xs_tem)
-        # assert torch.count_nonzero(xt_tem) == len(xt_tem)
         edge_index = torch.tensor(edge_index, dtype=torch.long).T
 
         if not return_dict:
@@ -275,18 +317,19 @@ class TableConverter:
         return bigraph
 
 
-def obtain_samples(process_idx, idxes_to_process):
+def obtain_samples(process_idx, idxes_to_process, task_name):
     new_samples = []
     tasks_to_n = defaultdict(int)
     t1 = time.time()
     for n, idx in enumerate(idxes_to_process):
-        if (n + 1) % 100 == 0:
+        if (n + 1) % 500 == 0:
             t2 = time.time()
             print(f"{process_idx}: {n / len(idxes_to_process)}, {t2 - t1}")
             t1 = t2
 
         sample = samples[idx]
         sample["idx"] = idx
+        is_table, is_graph = None, None
 
         if "test" in path:
             if 'question' in sample:
@@ -296,15 +339,23 @@ def obtain_samples(process_idx, idxes_to_process):
             elif 'hypothesis' in sample:
                 question = sample['hypothesis']
             else:
-                # totto
-                question = 'What the table snippet describes?'
+                if 'totto' in task_name:
+                    question = 'What the table snippet describes?'
+                    sample["table"] = convert_totto_table_format(sample["table"])
+                elif 'dart' in task_name:
+                    question = 'What the triples describes?'
+
                 sample["formatted_input"] = sample["formatted_input"].replace('### Response:\n', '').strip()
                 sample["formatted_input"] += f"\n\n\nquestion:\n\n{question}\n\n### Response:\n"
 
-                sample["table"] = convert_totto_table_format(sample["table"])
+            if 'table' in sample:
+                struct_data = sample["table"]
+                is_table = True
+            elif 'kg_tuples' in sample:
+                struct_data = sample["kg_tuples"]
+                is_graph = True
 
             sample['question'] = question
-            struct_data = sample["table"]
             sample["label"] = sample["seq_out"]
             sample["input"] = sample["formatted_input"]
 
@@ -348,14 +399,22 @@ def obtain_samples(process_idx, idxes_to_process):
                 question = sample["input"].split("\n\n")[-1]
                 assert question.lower().strip() == ori_question.lower().strip()
             else:
-                # totto
-                question = 'What the table snippet describes?'
+                if task_name == 'totto':
+                    question = 'What the table snippet describes?'
+                    train_data["table"] = convert_totto_table_format(train_data["table"])
+                elif task_name == 'dart':
+                    question = 'What the triples describes?'
+
                 sample["input"] += f'\n\n\nquestion:\n\n{question}'
-                train_data["table"] = convert_totto_table_format(train_data["table"])
 
             sample['question'] = question
 
-            struct_data = train_data["table"]
+            if 'table' in train_data:
+                struct_data = train_data["table"]
+                is_table = True
+            elif 'kg_tuples' in train_data:
+                struct_data = train_data["kg_tuples"]
+                is_graph = True
 
             # table = re.findall(r"table:\n\n([\s\S]*)\n\n\n", sample["input"])[0]
             sys_prompt = "Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.\n\n### Instruction:\n\n\n"
@@ -364,11 +423,13 @@ def obtain_samples(process_idx, idxes_to_process):
             sample["input"] = sys_prompt + sample["input"] + "\n\n### Response:\n"
 
         assert '[GRAPH_PAD]' in sample['input']
-        # print(sample['input'])
-        # print(question)
-        # print(sample['label'])
+
         try:
-            graph = converter._text2graph(struct_data, True)
+            if is_table:
+                graph = table_converter._text2graph(struct_data, True)
+            elif is_graph:
+                graph = graph_converter._kg_tupels2graph(struct_data, True)
+
             sample["graph"] = graph
             if graph:
                 if not pretraining:
@@ -512,18 +573,18 @@ def get_sentence_embeds(model, tokenizer, input_ids):
 
 if __name__ == "__main__":
 
-    n_process = 32
+    n_process = 16
     shuffle = False
     model_path = "sentence-transformers/all-roberta-large-v1"
 
-    pretraining = False
-    output_dir = f"./data/hytrel/all-table-tasks"
+    # pretraining = False
+    # output_dir = f"./data/hytrel/all-table-tasks"
 
-    # pretraining = True
-    # output_dir = f"./data/hytrel/pretraining"
+    pretraining = True
+    output_dir = f"./data/hytrel/pretraining"
 
     cache_graphs = False
-    cache_dir = f"./data/hytrel/cache2"
+    cache_dir = f"data/hytrel/all-table-kg-tasks/cache"
     if cache_graphs:
         llm = AutoModel.from_pretrained(
             model_path,
@@ -535,16 +596,18 @@ if __name__ == "__main__":
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    converter = TableConverter(tokenizer)
+    table_converter, graph_converter = TableConverter(tokenizer), GraphConverter(tokenizer)
+
     for path, tab_tasks in (
         (
             "data/processed/skginstruct_skgonly.json",
-            ["fetaqa", "hybridqa", "wikitq", "tabmwp", "totto", "wikisql", "tab_fact"],
+            ["fetaqa", "hybridqa", "wikitq", "tabmwp", "wikisql", "tab_fact"],
+            # ["fetaqa", "hybridqa", "wikitq", "tabmwp", "totto", "wikisql", "tab_fact"],
         ),
-        (
-            "data/processed/skginstruct_test_file_mistral.json",
-            ["task: wiki table question", "task: fetaqa", "task: hybridqa", "task: totto", "task: wikisql", "task: tabfact"]
-        ),
+        # (
+        #     "data/processed/skginstruct_test_file_mistral.json",
+        #     ["task: fetaqa", "task: hybridqa", "task: wiki table question", "task: tabmwp", "task: totto", "task: wikisql", "task: tabfact"]
+        # ),
     ):
         all_samples = load_json(path=path)
 
@@ -558,19 +621,17 @@ if __name__ == "__main__":
         print(list(tasks_to_samples.keys()))
 
         all_samples = []
-        for task in tab_tasks:
-            samples = tasks_to_samples[task]
+        for task_name in tab_tasks:
+            samples = tasks_to_samples[task_name]
 
             if "test" not in path:
-                train_dataset = load_dataset(f"tasks/{task}.py", trust_remote_code=True)["train"]
+                train_dataset = load_dataset(f"tasks/{task_name}.py", trust_remote_code=True)["train"]
                 assert len(train_dataset) == len(samples)
             else:
                 train_dataset = None
 
             num_samples = len(samples)
-            print(task, num_samples)
-
-            # obtain_samples(0, [1,])
+            print(task_name, num_samples)
 
             with Pool(processes=n_process) as pool:
                 num_samples_in_chunk = num_samples // n_process + 1
@@ -579,7 +640,7 @@ if __name__ == "__main__":
                 for i in range(n_process):
                     ed = st + num_samples_in_chunk
                     ed = min(ed, num_samples)
-                    jobs.append([i, list(range(st, ed))])
+                    jobs.append([i, list(range(st, ed)), task_name])
                     st = ed
 
                 results = pool.starmap(obtain_samples, jobs)
@@ -589,8 +650,10 @@ if __name__ == "__main__":
                 task_samples.extend(samples)
             print(len(task_samples))
 
+            print(task_samples[0]['input'])
+
             if cache_graphs:
-                os.makedirs(f"{cache_dir}/{task}", exist_ok=True)
+                os.makedirs(f"{cache_dir}/{task_name}", exist_ok=True)
 
                 with torch.no_grad():
                     for sample in tqdm(task_samples):
@@ -605,7 +668,7 @@ if __name__ == "__main__":
 
                         del embedding_s, embedding_t
 
-                        zip_file_path = f"{cache_dir}/{task}/{sample['idx'] // 1000}.zip"
+                        zip_file_path = f"{cache_dir}/{task_name}/{sample['idx'] // 1000}.zip"
                         with zipfile.ZipFile(zip_file_path, 'a', zipfile.ZIP_DEFLATED) as zipf:
                             graph_name = f"graph_{sample['idx']}.pkl"
                             sample["graph_path"] = (zip_file_path, graph_name)
@@ -616,7 +679,7 @@ if __name__ == "__main__":
                 for sample in tqdm(task_samples):
                     graph = sample.pop("graph") if "graph" in sample else None
 
-                    zip_file_path = f"{cache_dir}/{task}/{sample['idx'] // 1000}.zip"
+                    zip_file_path = f"{cache_dir}/{task_name}/{sample['idx'] // 1000}.zip"
                     graph_name = f"graph_{sample['idx']}.pkl"
 
                     sample["graph_path"] = (zip_file_path, graph_name)
@@ -627,9 +690,6 @@ if __name__ == "__main__":
 
         os.makedirs(output_dir, exist_ok=True)
         if "test" in path:
-            # if len(tab_tasks) > 1:
-            #     random.shuffle(new_samples)
-
             df = pd.DataFrame(all_samples)
 
             remain_keys = ["label", "question", "input", "graph_path"]

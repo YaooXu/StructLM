@@ -404,13 +404,14 @@ class RobertaOutput(nn.Module):
 
 # Copied from transformers.models.bert.modeling_bert.BertLayer with Bert->Roberta
 class RobertaLayer(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, layer_idx):
         super().__init__()
         self.chunk_size_feed_forward = config.chunk_size_feed_forward
         self.seq_len_dim = 1
         self.attention = RobertaAttention(config, is_cross_attention=False)
         self.is_decoder = config.is_decoder
         self.add_cross_attention = config.add_cross_attention
+        # if self.add_cross_attention and layer_idx % 2 != 0:
         if self.add_cross_attention:
             if not self.is_decoder:
                 raise ValueError(f"{self} should be used as a decoder model if cross attention is added")
@@ -451,39 +452,28 @@ class RobertaLayer(nn.Module):
         else:
             outputs = self_attention_outputs[1:]  # add self attentions if we output attention weights
 
-        cross_attn_present_key_value = None
-        if self.is_decoder and encoder_hidden_states is not None:
-            if not hasattr(self, "crossattention"):
-                raise ValueError(
-                    f"If `encoder_hidden_states` are passed, {self} has to be instantiated with cross-attention layers"
-                    " by setting `config.add_cross_attention=True`"
-                )
-
-            # cross_attn cached key/values tuple is at positions 3,4 of past_key_value tuple
-            cross_attn_past_key_value = past_key_value[-2:] if past_key_value is not None else None
-            cross_attention_outputs = self.crossattention(
-                attention_output,
-                attention_mask,
-                head_mask,
-                encoder_hidden_states,
-                encoder_attention_mask,
-                cross_attn_past_key_value,
-                output_attentions,
-            )
-            attention_output = cross_attention_outputs[0]
-            outputs = outputs + cross_attention_outputs[1:-1]  # add cross attentions if we output attention weights
-
-            # add cross-attn cache to positions 3,4 of present_key_value tuple
-            cross_attn_present_key_value = cross_attention_outputs[-1]
-            present_key_value = present_key_value + cross_attn_present_key_value
-
-        # TODO, xuyao
         if query_length > 0:
+            query_attention_output = attention_output[:, :query_length, :]
+
+            if encoder_hidden_states is not None:
+                cross_attention_outputs = self.crossattention(
+                    query_attention_output,
+                    attention_mask,
+                    head_mask,
+                    encoder_hidden_states,
+                    encoder_attention_mask,
+                    output_attentions=output_attentions,
+                )
+                query_attention_output = cross_attention_outputs[0]
+                outputs = (
+                    outputs + cross_attention_outputs[1:-1]
+                )  # add cross attentions if we output attention weights
+
             layer_output = apply_chunking_to_forward(
                 self.feed_forward_chunk_query,
                 self.chunk_size_feed_forward,
                 self.seq_len_dim,
-                attention_output[:, :query_length, :],
+                query_attention_output,
             )
             if attention_output.shape[1] > query_length:
                 layer_output_text = apply_chunking_to_forward(
@@ -494,17 +484,85 @@ class RobertaLayer(nn.Module):
                 )
                 layer_output = torch.cat([layer_output, layer_output_text], dim=1)
         else:
+            if encoder_hidden_states is not None:
+                cross_attention_outputs = self.crossattention(
+                    attention_output,
+                    attention_mask,
+                    head_mask,
+                    encoder_hidden_states,
+                    encoder_attention_mask,
+                    output_attentions=output_attentions,
+                )
+                attention_output = cross_attention_outputs[0]
+                outputs = outputs + cross_attention_outputs[1:-1]
+                
             layer_output = apply_chunking_to_forward(
-                self.feed_forward_chunk, self.chunk_size_feed_forward, self.seq_len_dim, attention_output
+                self.feed_forward_chunk,
+                self.chunk_size_feed_forward,
+                self.seq_len_dim,
+                attention_output,
             )
 
         outputs = (layer_output,) + outputs
 
-        # if decoder, return the attn key/values as the last output
-        if self.is_decoder:
-            outputs = outputs + (present_key_value,)
+        outputs = outputs + (present_key_value,)
 
-        return outputs
+        return outputs       
+
+        # cross_attn_present_key_value = None
+        # if self.is_decoder and encoder_hidden_states is not None:
+        #     if not hasattr(self, "crossattention"):
+        #         raise ValueError(
+        #             f"If `encoder_hidden_states` are passed, {self} has to be instantiated with cross-attention layers"
+        #             " by setting `config.add_cross_attention=True`"
+        #         )
+
+        #     # cross_attn cached key/values tuple is at positions 3,4 of past_key_value tuple
+        #     cross_attn_past_key_value = past_key_value[-2:] if past_key_value is not None else None
+        #     cross_attention_outputs = self.crossattention(
+        #         attention_output,
+        #         attention_mask,
+        #         head_mask,
+        #         encoder_hidden_states,
+        #         encoder_attention_mask,
+        #         cross_attn_past_key_value,
+        #         output_attentions,
+        #     )
+        #     attention_output = cross_attention_outputs[0]
+        #     outputs = outputs + cross_attention_outputs[1:-1]  # add cross attentions if we output attention weights
+
+        #     # add cross-attn cache to positions 3,4 of present_key_value tuple
+        #     cross_attn_present_key_value = cross_attention_outputs[-1]
+        #     present_key_value = present_key_value + cross_attn_present_key_value
+
+        # # TODO, xuyao
+        # if query_length > 0:
+        #     layer_output = apply_chunking_to_forward(
+        #         self.feed_forward_chunk_query,
+        #         self.chunk_size_feed_forward,
+        #         self.seq_len_dim,
+        #         attention_output[:, :query_length, :],
+        #     )
+        #     if attention_output.shape[1] > query_length:
+        #         layer_output_text = apply_chunking_to_forward(
+        #             self.feed_forward_chunk,
+        #             self.chunk_size_feed_forward,
+        #             self.seq_len_dim,
+        #             attention_output[:, query_length:, :],
+        #         )
+        #         layer_output = torch.cat([layer_output, layer_output_text], dim=1)
+        # else:
+        #     layer_output = apply_chunking_to_forward(
+        #         self.feed_forward_chunk, self.chunk_size_feed_forward, self.seq_len_dim, attention_output
+        #     )
+
+        # outputs = (layer_output,) + outputs
+
+        # # if decoder, return the attn key/values as the last output
+        # if self.is_decoder:
+        #     outputs = outputs + (present_key_value,)
+
+        # return outputs
 
     def feed_forward_chunk(self, attention_output):
         intermediate_output = self.intermediate(attention_output)
@@ -522,7 +580,7 @@ class RobertaEncoder(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.layer = nn.ModuleList([RobertaLayer(config) for _ in range(config.num_hidden_layers)])
+        self.layer = nn.ModuleList([RobertaLayer(config, i) for i in range(config.num_hidden_layers)])
         self.gradient_checkpointing = False
 
     def forward(
@@ -564,7 +622,7 @@ class RobertaEncoder(nn.Module):
                     hidden_states,
                     attention_mask,
                     layer_head_mask,
-                    encoder_hidden_states,
+                    encoder_hidden_states[i] if type(encoder_hidden_states) is list else encoder_hidden_states,
                     encoder_attention_mask,
                     past_key_value,
                     output_attentions,
@@ -575,7 +633,7 @@ class RobertaEncoder(nn.Module):
                     hidden_states,
                     attention_mask,
                     layer_head_mask,
-                    encoder_hidden_states,
+                    encoder_hidden_states[i] if type(encoder_hidden_states) is list else encoder_hidden_states,
                     encoder_attention_mask,
                     past_key_value,
                     output_attentions,
@@ -931,7 +989,7 @@ class RobertaModel(RobertaPreTrainedModel):
         # we need to make broadcastable to [batch_size, num_heads, seq_length, seq_length]
         # TODO: xuyao
         if encoder_hidden_states is not None:
-            encoder_batch_size, encoder_sequence_length, _ = encoder_hidden_states.size()
+            encoder_batch_size, encoder_sequence_length, _ = encoder_hidden_states[-1].size() if type(encoder_hidden_states) is list else encoder_hidden_states.size()
             encoder_hidden_shape = (encoder_batch_size, encoder_sequence_length)
             if encoder_attention_mask is None:
                 encoder_attention_mask = torch.ones(encoder_hidden_shape, device=device)

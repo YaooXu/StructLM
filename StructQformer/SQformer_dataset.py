@@ -25,7 +25,7 @@ from torch_geometric.data.batch import Batch
 
 import torch.nn.functional as F
 import datasets
-from StructQformer.convert_table_to_graph_hytrel import BipartiteData, TableConverter
+from StructQformer.utils.data import BipartiteData, TableConverter
 from utils.utils import load_json
 
 logger = logging.getLogger(__name__)

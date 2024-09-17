@@ -101,6 +101,7 @@ class StructQformer(nn.Module):
             self.roberta_config.is_decoder = True
             self.roberta_config.query_length = self.num_query_tokens
             self.roberta_config.encoder_width = self.args.hytrel.hidden_size
+            self.roberta_config.cross_attn_start_layer = hypergraph_enc_config.num_hidden_layers
 
             from .Qformer_roberta import RobertaForCausalLM
             # from .Qformer_roberta_ori import RobertaForCausalLM
@@ -136,9 +137,9 @@ class StructQformer(nn.Module):
         return self.decoder.device
 
     def gen_query_embeds_v2(self, qformer_inputs, llm, llm_graph_pad_token_id):
-        question_ids = qformer_inputs["input_ids"]
+        input_ids = qformer_inputs["input_ids"]
         question_attention_mask = qformer_inputs["attention_mask"]
-        batch_size = question_ids.shape[0]
+        batch_size = input_ids.shape[0]
 
         if self.args.qformer.skip_graph_encoder:
             query_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
@@ -146,28 +147,17 @@ class StructQformer(nn.Module):
             if self.args.qformer.without_gnn:
                 graph_embeds, graph_attention_mask = None, None
             else:
-                all_graph_embeds = self.graph_encoder(qformer_inputs["graphs"])
+                all_layers_embeds, graph_attention_mask = self.graph_encoder(qformer_inputs["graphs"])
+                graph_embeds = all_layers_embeds[-1]
 
-                x_s_idxes = qformer_inputs["graphs"]["x_s_ptr"].tolist()
-                # x_t_idxes = graph["graphs"]["x_t_ptr"].tolist()
-                list_graph_embeds = []
-                list_graph_attn = []
-                for i in range(len(x_s_idxes) - 1):
-                    graph_embeds = torch.cat(
-                        [
-                            all_graph_embeds[0][x_s_idxes[i] : x_s_idxes[i + 1], :],  # s_nodes
-                            # all_graph_embeds[1][x_t_idxes[i] : x_t_idxes[i + 1], :],  # t_nodes
-                        ],
-                        dim=0
-                    )
-                    list_graph_embeds.append(graph_embeds)
-                    list_graph_attn.append(torch.LongTensor([1] * graph_embeds.shape[0]))
-                graph_embeds = torch.nn.utils.rnn.pad_sequence(list_graph_embeds, batch_first=True)
-                graph_attention_mask = torch.nn.utils.rnn.pad_sequence(list_graph_attn, batch_first=True).to(graph_embeds.device)
+                # graph_embeds = self.ln_norm1(graph_embeds)
+                
+                # graph_embeds = [None] * (self.roberta_config.num_hidden_layers - len(all_layers_embeds)) + all_layers_embeds
 
-                # graph_embeds = self.projector1(graph_embeds)
-                graph_embeds = self.ln_norm1(graph_embeds)
-
+                # dummy_graph_embeds = [None] * (self.roberta_config.num_hidden_layers - len(all_layers_embeds))
+                # # [None, embeds, None, embeds， 。。。]
+                # graph_embeds = [x for pair in zip(dummy_graph_embeds, all_layers_embeds) for x in pair]
+                
             query_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
             query_atts = torch.ones(query_embeds.shape[:-1]).to(query_embeds.device)
             
@@ -180,7 +170,7 @@ class StructQformer(nn.Module):
                 attention_mask = torch.cat([query_atts, question_attention_mask], dim=1)
 
             query_output = self.model.roberta(
-                input_ids=question_ids,
+                input_ids=input_ids,
                 attention_mask=attention_mask,
                 encoder_hidden_states=graph_embeds,
                 encoder_attention_mask=graph_attention_mask,
@@ -215,27 +205,16 @@ class StructQformer(nn.Module):
         input_ids, attention_mask = qformer_inputs["input_ids"], qformer_inputs["attention_mask"]
         batch_size = input_ids.shape[0]
 
-        graphs = qformer_inputs["graphs"]
-        all_graph_embeds = self.graph_encoder(graphs)
+        all_layers_embeds, graph_attention_mask = self.graph_encoder(qformer_inputs["graphs"])
+        graph_embeds = all_layers_embeds[-1]
+        # graph_embeds = [None] * (self.roberta_config.num_hidden_layers - len(all_layers_embeds)) + all_layers_embeds
 
-        x_s_idxes = graphs["x_s_ptr"].tolist()
-        list_graph_embeds = []
-        list_graph_attn = []
-        for i in range(len(x_s_idxes) - 1):
-            graph_embeds = torch.cat(
-                [
-                    all_graph_embeds[0][x_s_idxes[i] : x_s_idxes[i + 1], :],  # s_nodes
-                    # all_graph_embeds[1][x_t_idxes[i] : x_t_idxes[i + 1], :],  # t_nodes
-                ],
-                dim=0
-            )
-            list_graph_embeds.append(graph_embeds)
-            list_graph_attn.append(torch.LongTensor([1] * graph_embeds.shape[0]))
-        graph_embeds = torch.nn.utils.rnn.pad_sequence(list_graph_embeds, batch_first=True)
-        graph_attention_mask = torch.nn.utils.rnn.pad_sequence(list_graph_attn, batch_first=True).to(graph_embeds.device)
+        # dummy_graph_embeds = [None] * (self.roberta_config.num_hidden_layers - len(all_layers_embeds))
+        # # [None, embeds, None, embeds, ...]
+        # graph_embeds = [x for pair in zip(dummy_graph_embeds, all_layers_embeds) for x in pair]
 
         # graph_embeds = self.projector1(graph_embeds)
-        graph_embeds = self.ln_norm1(graph_embeds)
+        # graph_embeds = self.ln_norm1(graph_embeds)
 
         query_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
         query_atts = torch.ones(query_embeds.shape[:-1]).to(query_embeds.device)
@@ -247,6 +226,19 @@ class StructQformer(nn.Module):
             encoder_attention_mask=graph_attention_mask,
             labels=qformer_inputs["labels"],
         )
+
+        # attention_mask = torch.cat([query_atts, question_attention_mask], dim=1)
+        # query_output = self.model(
+        #     input_ids=question_ids,
+        #     attention_mask=attention_mask,
+        #     encoder_hidden_states=graph_embeds,
+        #     encoder_attention_mask=graph_attention_mask,
+        #     use_cache=False,
+        #     return_dict=True,
+        #     query_length=self.num_query_tokens,
+        #     query_embeds=query_embeds, 
+        #     only_query_embeds=self.args.qformer.only_query_embeds
+        # )
 
         # query_output = self.model.roberta(
         #     query_embeds=query_embeds, 
@@ -324,8 +316,8 @@ class StructQformerLLM(nn.Module):
         if self.num_query_tokens > 0:
             self.qformer = StructQformer(args, hypergraph_enc_config)
 
-            self.projector = nn.Linear(self.qformer.roberta_config.hidden_size, self.llm.config.hidden_size)
-            self.ln_norm = nn.LayerNorm(self.llm.config.hidden_size)
+            self.projector = nn.Linear(self.qformer.roberta_config.hidden_size, self.llm.config.hidden_size, dtype=kwargs["torch_dtype"])
+            self.ln_norm = nn.LayerNorm(self.llm.config.hidden_size, dtype=kwargs["torch_dtype"])
 
             if args.qformer.ckpt_path is not None and not args.qformer.skip_graph_encoder:
                 logger.info(f"loading qformer ckpt from {args.qformer.ckpt_path}")
@@ -346,6 +338,7 @@ class StructQformerLLM(nn.Module):
                 torch.load(os.path.join(args.llm.ckpt_path, "model.bin")),
                 strict=False
             )
+
             self.to(kwargs["torch_dtype"])
 
     @property

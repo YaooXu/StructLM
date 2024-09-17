@@ -1,7 +1,7 @@
 import torch
 from .layers import *
-from transformers import AutoTokenizer
-
+from transformers import AutoTokenizer, AutoModel
+from StructQformer.utils.sentence_transformer import get_sentence_embeds
 
 
 # class Embedding(nn.Module):
@@ -25,11 +25,22 @@ class Embedding(nn.Module):
     # self.dropout = nn.Dropout(config.hidden_dropout_prob)
     self.proj = nn.Linear(1024, config.hidden_size)
     self.llm_pad_token_id = config.llm_pad_token_id
-    
+
+    model_path = 'sentence-transformers/all-roberta-large-v1'
+    self.sbert = AutoModel.from_pretrained(
+            model_path,
+        )
+    self.sbert.requires_grad_(False)
+    self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+
   def forward(self, x_s, x_t):
-    x_s = x_s.to(self.proj.weight.dtype)
-    x_t = x_t.to(self.proj.weight.dtype)
-      
+    if x_s.dtype == torch.long:
+      x_s = get_sentence_embeds(self.sbert, self.tokenizer, x_s).to(self.proj.weight.dtype)
+      x_t = get_sentence_embeds(self.sbert, self.tokenizer, x_t).to(self.proj.weight.dtype)
+    else:
+      x_s = x_s.to(self.proj.weight.dtype)
+      x_t = x_t.to(self.proj.weight.dtype)
+        
     return self.proj(x_s), self.proj(x_t)
   
 class EncoderLayer(nn.Module):
@@ -42,12 +53,15 @@ class EncoderLayer(nn.Module):
     self.E2V = AllSetTrans(config = config)
 
 
-  def forward(self, embedding_s, embedding_t, edge_index):
+  def forward(self, embedding_s, embedding_t, edge_index1, edge_index2):
 
-    # reverse the index
-    reversed_edge_index = torch.stack([edge_index[1], edge_index[0]], dim=0)
+    # # reverse the index
+    if edge_index2 is None:
+      reversed_edge_index = torch.stack([edge_index1[1], edge_index1[0]], dim=0)
+    else:
+      reversed_edge_index = edge_index2
     # from nodes to hyper-edges
-    embedding_t_tem = F.relu(self.V2E(embedding_s, edge_index))
+    embedding_t_tem = F.relu(self.V2E(embedding_s, edge_index1))
 
     # from hyper-edges to nodes
     embedding_t = torch.cat([embedding_t, embedding_t_tem], dim=-1)
@@ -73,20 +87,42 @@ class Encoder(nn.Module):
 
     # Add self-loop
     num_nodes, num_hyper_edges = data.x_s.size(0), data.x_t.size(0)
-    self_edge_index = torch.tensor([[i, num_hyper_edges+i] for i in range(num_nodes)]).T
-    if ('edge_neg_view' in self.config.to_dict() and self.config.edge_neg_view == 1):
-        edge_index = torch.cat([data.edge_index_corr1, self_edge_index.to(data.edge_index_corr1.device)], dim=-1)
-    elif ('edge_neg_view' in self.config.to_dict() and self.config.edge_neg_view == 2):
-        edge_index = torch.cat([data.edge_index_corr2, self_edge_index.to(data.edge_index_corr2.device)], dim=-1)
-    else:
-        edge_index = torch.cat([data.edge_index, self_edge_index.to(data.edge_index.device)], dim=-1)
+    # self_edge_index = torch.tensor([[i, num_hyper_edges+i] for i in range(num_nodes)]).T
+    # edge_index1 = torch.cat([data.edge_index1, self_edge_index.to(data.edge_index1.device)], dim=-1)
+    # edge_index2 = None
 
+    # if ('edge_neg_view' in self.config.to_dict() and self.config.edge_neg_view == 1):
+    #     edge_index = torch.cat([data.edge_index_corr1, self_edge_index.to(data.edge_index_corr1.device)], dim=-1)
+    # elif ('edge_neg_view' in self.config.to_dict() and self.config.edge_neg_view == 2):
+    #     edge_index = torch.cat([data.edge_index_corr2, self_edge_index.to(data.edge_index_corr2.device)], dim=-1)
+    # else:
+    #     edge_index = torch.cat([data.edge_index, self_edge_index.to(data.edge_index.device)], dim=-1)
+
+    self_edge_index1 = torch.tensor([[i, num_hyper_edges+i] for i in range(num_nodes)]).T
+    edge_index1 = torch.cat([data.edge_index1, self_edge_index1.to(data.edge_index1.device)], dim=-1)
+
+    self_edge_index2 = torch.tensor([[num_hyper_edges+i, i] for i in range(num_nodes)]).T
+    edge_index2 = torch.cat([data.edge_index2, self_edge_index2.to(data.edge_index2.device)], dim=-1)
+
+    x_s_idxes = data["x_s_ptr"].tolist()
+    all_layers_embeds = []
 
     for i, layer_module in enumerate(self.layer):
-      embedding_s, embedding_t = layer_module(embedding_s, embedding_t, edge_index)
-    outputs = (embedding_s, embedding_t[:num_hyper_edges])
+      embedding_s, embedding_t = layer_module(embedding_s, embedding_t, edge_index1, edge_index2)
 
-    return outputs
+      list_graph_embeds = []
+      for i in range(len(x_s_idxes) - 1):
+        graph_embeds = embedding_s[x_s_idxes[i] : x_s_idxes[i + 1], :]  # s_nodes
+        list_graph_embeds.append(graph_embeds)
+      graph_embeds = torch.nn.utils.rnn.pad_sequence(list_graph_embeds, batch_first=True).to(embedding_s.device)
+      all_layers_embeds.append(graph_embeds)
+
+    list_graph_attn = []
+    for i in range(len(x_s_idxes) - 1):
+        list_graph_attn.append(torch.LongTensor([1] * (x_s_idxes[i + 1] - x_s_idxes[i])))
+    graph_attention_mask = torch.nn.utils.rnn.pad_sequence(list_graph_attn, batch_first=True).to(embedding_s.device)
+
+    return all_layers_embeds, graph_attention_mask
 
 
 

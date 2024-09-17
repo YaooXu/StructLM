@@ -16,3 +16,6 @@ UniSKG
 *.sh
 
 configure/
+cache
+
+*.pq

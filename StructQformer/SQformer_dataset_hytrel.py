@@ -25,7 +25,7 @@ from torch_geometric.data.batch import Batch
 
 import torch.nn.functional as F
 import datasets
-from StructQformer.convert_table_to_graph_hytrel import BipartiteData #StructDataConverter, _get_dist_mat
+from StructQformer.utils.data import BipartiteData #StructDataConverter, _get_dist_mat
 from utils.utils import load_json
 
 from transformers.data import DataCollatorWithPadding
@@ -248,9 +248,39 @@ class GraphDataset(Dataset):
     def __getitem__(self, index):
         sample = self.raw_dataset[index]
 
+        if self.sqformer_pretraining:
+            assert type(sample['question']) is list
+            idx = random.choice(range(len(sample['question'])))
+
+            question = sample['question'][idx]
+            label = sample['label'][idx]
+
+            graph = sample['graph']
+        else:
+            question = sample['question']
+            label = sample['label']
+
+        if 'graph_path' in sample:
+            # use cache
+            try:
+                with zipfile.ZipFile(sample['graph_path'][0], 'r') as zipf:
+                    # 打开并读取特定文件
+                    with zipf.open(sample['graph_path'][1]) as file:
+                        serialized_dict = file.read()
+                        # 反序列化字典对象
+                        graph = pickle.loads(serialized_dict)
+                        graph['edge_index1'] = graph.pop('edge_index')
+                        graph['edge_index2'] = torch.stack([graph['edge_index1'][1], graph['edge_index1'][0]], dim=0)
+            except Exception as e:
+                graph = None
+                print(sample['graph_path'])
+                print(e)
+        else:
+            graph = sample['graph']
+    
         # qformer input and target (for pretraining)
-        tokenized_input = self.encoder_tokenizer(sample['question'], return_attention_mask=False, add_special_tokens=False)
-        tokenized_target = self.encoder_tokenizer(sample['label'], return_attention_mask=False, add_special_tokens=False)
+        tokenized_input = self.encoder_tokenizer(question, return_attention_mask=False, add_special_tokens=False)
+        tokenized_target = self.encoder_tokenizer(label, return_attention_mask=False, add_special_tokens=False)
         s = [self.encoder_tokenizer.bos_token_id] + tokenized_input["input_ids"]
         t = tokenized_target["input_ids"] + [self.encoder_tokenizer.eos_token_id]
         if self.sqformer_pretraining:
@@ -259,18 +289,6 @@ class GraphDataset(Dataset):
         else:
             qformer_input_ids = torch.LongTensor(s)[:512]
             qformer_labels = torch.LongTensor([IGNORE_INDEX] * len(s))[:512]
-
-        try:
-            with zipfile.ZipFile(sample['graph_path'][0], 'r') as zipf:
-                # 打开并读取特定文件
-                with zipf.open(sample['graph_path'][1]) as file:
-                    serialized_dict = file.read()
-                    # 反序列化字典对象
-                    graph = pickle.loads(serialized_dict)
-        except Exception as e:
-            graph = None
-            print(sample['graph_path'])
-            print(e)
         
         qformer_input = {
             'graph': graph,

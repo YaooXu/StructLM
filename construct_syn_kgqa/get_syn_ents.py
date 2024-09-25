@@ -5,7 +5,7 @@ import random
 import re
 import sys
 
-sys.path.append("./")
+
 
 from tqdm import tqdm
 from utils import load_jsonl

@@ -1,28 +1,9 @@
-# coding=utf-8
-# Copyright 2021 The HuggingFace Datasets Authors and the current dataset script contributor.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-"""Spider: A Large-Scale Human-Labeled Dataset for Text-to-SQL Tasks"""
-
-
 import json
 from third_party.spider.preprocess.get_tables import dump_db_json_schema
 
 import datasets
 
-
 logger = datasets.logging.get_logger(__name__)
-
 
 _CITATION = """\
 @article{yu2018spider,
@@ -41,7 +22,8 @@ _HOMEPAGE = "https://yale-lily.github.io/spider"
 
 _LICENSE = "CC BY-SA 4.0"
 
-_URL = "https://drive.google.com/uc?export=download&confirm=9iBg&id=1_AckYkinAnhqmRQtGsQgUKAnTHxxX5J0"
+# 将 _URL 改为本地文件的路径，例如 /path/to/your/local_file.zip
+_LOCAL_ZIP_PATH = "/cpfs/29f69eb5e2e60f26/user/GPT/pretrain/zengxiangrong2/intern/xuyao/StructLM/data/datasets/spider.zip"
 
 
 class Spider(datasets.GeneratorBasedBuilder):
@@ -93,21 +75,22 @@ class Spider(datasets.GeneratorBasedBuilder):
         )
 
     def _split_generators(self, dl_manager):
-        downloaded_filepath = dl_manager.download_and_extract(_URL)
+        # 将下载步骤替换为直接从本地路径解压
+        extracted_filepath = dl_manager.extract(_LOCAL_ZIP_PATH)
 
         return [
             datasets.SplitGenerator(
                 name=datasets.Split.TRAIN,
                 gen_kwargs={
-                    "data_filepath": downloaded_filepath + "/spider/train_spider.json",
-                    "db_path": downloaded_filepath + "/spider/database",
+                    "data_filepath": extracted_filepath + "/spider/train_spider.json",
+                    "db_path": extracted_filepath + "/spider/database",
                 },
             ),
             datasets.SplitGenerator(
                 name=datasets.Split.VALIDATION,
                 gen_kwargs={
-                    "data_filepath": downloaded_filepath + "/spider/dev.json",
-                    "db_path": downloaded_filepath + "/spider/database",
+                    "data_filepath": extracted_filepath + "/spider/dev.json",
+                    "db_path": extracted_filepath + "/spider/database",
                 },
             ),
         ]

@@ -105,7 +105,7 @@ class KVRET(datasets.GeneratorBasedBuilder):
                     "driver": datasets.Value("string"),
                     "assistant": datasets.Value("string")
                 }),
-            "table": {
+            "kb": {
                 "header": datasets.Sequence(datasets.Value("string")),
                 "rows": datasets.Sequence((datasets.Sequence(datasets.Value("string"))))
             },

@@ -6,7 +6,7 @@ import sys
 
 from tqdm import tqdm
 
-sys.path.append("./")
+
 
 from utils import convert_kg_tuples_to_str, load_json, load_jsonl
 

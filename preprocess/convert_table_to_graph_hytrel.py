@@ -3,6 +3,8 @@ import random
 import sys
 import time
 import zipfile
+import sys
+sys.path.append('./')
 
 import numpy as np
 
@@ -91,7 +93,7 @@ def obtain_samples(process_idx, idxes_to_process, cache_dir):
     if cache_graphs:
         llm = AutoModel.from_pretrained(
             model_path,
-            device_map="auto",
+            device_map=f"cuda:{process_idx}",
         )
         llm.eval()
 
@@ -129,7 +131,7 @@ def obtain_samples(process_idx, idxes_to_process, cache_dir):
 
                     del embedding_s, embedding_t
 
-                    zip_file_path = f"{cache_dir}/{process_idx}.zip"
+                    zip_file_path = f"{cache_dir}/{sample['idx'] // 1000}.zip"
                     with zipfile.ZipFile(zip_file_path, 'a', zipfile.ZIP_DEFLATED) as zipf:
                         graph_name = f"graph_{sample['idx']}.pkl"
                         sample["graph_path"] = (zip_file_path, graph_name)
@@ -139,7 +141,7 @@ def obtain_samples(process_idx, idxes_to_process, cache_dir):
                 else:
                     graph = sample.pop("graph")
 
-                    zip_file_path = f"{cache_dir}/{process_idx}.zip"
+                    zip_file_path = f"{cache_dir}/{sample['idx'] // 1000}.zip"
                     graph_name = f"graph_{sample['idx']}.pkl"
 
                     sample["graph_path"] = (zip_file_path, graph_name)
@@ -152,7 +154,7 @@ def obtain_samples(process_idx, idxes_to_process, cache_dir):
 
 if __name__ == "__main__":
 
-    n_process = 10 # DO NOT CHANGE!
+    n_process = 8 # num GPU
     shuffle = False
     model_path = "sentence-transformers/all-roberta-large-v1"
 
@@ -182,6 +184,7 @@ if __name__ == "__main__":
             cur_cache_dir = os.path.join(cache_dir, 'test')
         else:
             cur_cache_dir = os.path.join(cache_dir, 'train')
+        os.makedirs(cur_cache_dir, exist_ok=True)
 
         with Pool(processes=n_process) as pool:
             num_samples_in_chunk = num_samples // n_process + 1

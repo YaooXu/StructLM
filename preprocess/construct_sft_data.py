@@ -10,16 +10,25 @@ from utils.tool import get_constructor
 from utils.configure import Configure
 
 from transformers import AutoTokenizer, AutoModel
-from dataset.data import TableConverter, GraphConverter
-model_path = "sentence-transformers/all-roberta-large-v1"
-tokenizer = AutoTokenizer.from_pretrained(model_path, device_map="auto")
-table_converter, graph_converter = TableConverter(tokenizer), GraphConverter(tokenizer)
-def convert_kg_tups_bidir(kg_tuples):
-    new_kg_tuples = []
-    for tup in kg_tuples:
-        new_kg_tuples.append([f'Node: {tup[0]}', f'Relation: {tup[1]}', f'Node: {tup[2]}'])
-        # new_kg_tuples.append([f'Node: {tup[2]}', f'Inverse Relation: {tup[1]}', f'Node: {tup[0]}'])
-    return new_kg_tuples
+# from dataset.data import TableConverter, GraphConverter
+# model_path = "sentence-transformers/all-roberta-large-v1"
+# tokenizer = AutoTokenizer.from_pretrained(model_path, device_map="auto")
+# table_converter, graph_converter = TableConverter(tokenizer), GraphConverter(tokenizer)
+# def convert_kg_tups_bidir(kg_tuples):
+#     new_kg_tuples = []
+#     for tup in kg_tuples:
+#         new_kg_tuples.append([f'Node: {tup[0]}', f'Relation: {tup[1]}', f'Node: {tup[2]}'])
+#         # new_kg_tuples.append([f'Node: {tup[2]}', f'Inverse Relation: {tup[1]}', f'Node: {tup[0]}'])
+#     return new_kg_tuples
+
+tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf", device_map="auto")
+def truncate_to_max_tokens(text, max_tokens=2048):
+    # 使用tokenizer进行token化，确保返回的tokens不会超过 max_tokens
+    tokens = tokenizer(text, truncation=True, max_length=max_tokens, return_tensors='pt')
+
+    # 将这些tokens转回原始文本
+    truncated_text = tokenizer.decode(tokens['input_ids'][0], skip_special_tokens=True)
+    return truncated_text
 
 prompt = f"Below is an instruction that describes a task, paired with an input that provides further context. "\
         "Write a response that appropriately completes the request.\n\n"\
@@ -36,8 +45,6 @@ with open(test_prompt_filepath, 'r') as f:
     test_prompts_dict = json.load(f)
 
 
-train_processed_samples = []
-
 table_tasks = ["wikitq", "hybridqa", "fetaqa", "tabmwp", "wikisql", "tab_fact", "totto", "kvret"]
 schema_tasks = ["spider", "sparc"]
 kg_tasks = ['compwebq', 'dart']
@@ -46,7 +53,9 @@ kg_tasks = ['compwebq', 'dart']
 def construct_processed_samples(tasks, prompts_dict, is_train, output_path):
     processed_samples = []
     for task_name in tasks:
-        error_cnt = 0
+        # error_cnt = 0
+
+        task_samples = [] 
 
         print(task_name)
         raw_datasets_split = load_dataset(f"preprocess/tasks/{task_name}.py", trust_remote_code=True)
@@ -73,7 +82,7 @@ def construct_processed_samples(tasks, prompts_dict, is_train, output_path):
             input_format = prompts_dict[task_name]['input_format']
 
             text_in = sample['text_in']
-            struct_in = sample['struct_in']
+            struct_in = truncate_to_max_tokens(sample['struct_in'])
             seq_out = sample['seq_out']
 
             input_ = input_format.format(struct_in=struct_in, text_in=text_in)
@@ -86,22 +95,30 @@ def construct_processed_samples(tasks, prompts_dict, is_train, output_path):
             label = seq_out
 
             if is_train:
-                processed_sample = {
+                task_sample = {
                     'idx': len(processed_samples),
                     'input': final_input,
                     'label': label,
                     key: struct_data,
-                    'key': key
+                    'key': key,
+                    'task': task_name,
+                    'task_id': len(task_samples),
                 }
             else:
                 sample.update({
                     'idx': len(processed_samples),
                     'input': final_input,
                     'label': label, 
-                    'key': key
+                    'key': key,
+                    'arg_path': f'META_TUNING/{task_name}.cfg',
+                    'task': task_name,
+                    'task_id': len(task_samples),
                 })
-                processed_sample = sample
-            processed_samples.append(processed_sample)
+                task_sample = sample
+                
+            task_samples.append(task_sample)
+
+        processed_samples.extend(task_samples)
 
         #     try:
         #         if processed_sample['key'] == 'table':
@@ -127,3 +144,6 @@ all_tasks = table_tasks + schema_tasks + kg_tasks
 construct_processed_samples(all_tasks, train_prompts_dict, True, 'data/processed/custom_skginstruct.json')
 construct_processed_samples(all_tasks, test_prompts_dict, False, 'data/processed/custom_test_skginstruct.json')
 
+# all_tasks = ['spider']
+# construct_processed_samples(all_tasks, train_prompts_dict, True, 'custom_skginstruct.json')
+# construct_processed_samples(all_tasks, test_prompts_dict, False, 'custom_test_skginstruct.json')

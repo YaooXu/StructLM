@@ -1,5 +1,4 @@
 data/
-data*/
 models/ckpts
 *output/
 **/*.pyc

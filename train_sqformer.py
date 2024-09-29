@@ -173,8 +173,10 @@ if __name__ == "__main__":
         )
         test_examples = load_jsonl(dataset_dir / f"ori_test.jsonl")
 
-    # if "debug" in training_args.output_dir:
-    #     test_dataset = test_dataset.select(random.sample(range(len(test_dataset)), k=1000))
+    if "debug" in training_args.output_dir:
+        idxes = random.sample(range(len(test_dataset)), k=100)
+        test_dataset = test_dataset.select(idxes)
+        test_examples = [test_examples[i] for i in idxes]
 
     data_collator = DataCollatorForGraphSupervisedDataset(llm_tokenizer, encoder_tokenizer)
 

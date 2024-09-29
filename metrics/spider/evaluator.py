@@ -12,7 +12,7 @@ class EvaluateTool(object):
     def evaluate(self, preds, golds, section):
 
         # find the path in data/downloads/extracted/*/spider
-        matching_paths = glob.glob("data/downloads/extracted/*/spider/database")
+        matching_paths = glob.glob("data/downloads/extracted/spider/database")
         assert len(matching_paths) == 1
         db_dir = matching_paths[0]
         golds[0]['db_path'] = db_dir

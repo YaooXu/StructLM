@@ -12,7 +12,7 @@ class EvaluateTool(object):
 
     def evaluate(self, preds, golds, section):
 
-        matching_paths = glob.glob("data/downloads/extracted/*/sparc/database")
+        matching_paths = glob.glob("data/downloads/extracted/sparc/database")
         assert len(matching_paths) == 1
         db_dir = matching_paths[0]
         golds[0]['db_path'] = db_dir

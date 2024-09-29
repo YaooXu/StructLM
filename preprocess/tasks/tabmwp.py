@@ -95,7 +95,7 @@ class TabMWP(datasets.GeneratorBasedBuilder):
                 'question': datasets.Value("string"),
                 # choices is either a sequence of strings or none
                 'choices': datasets.Value("string"),
-                'answer_text': datasets.Value("string"),
+                'answer': datasets.Value("string"),
                 'unit': datasets.Value("string"),
                 'table_title': datasets.Value("string"),
                 "table": {"header": datasets.features.Sequence(datasets.Value("string")),
@@ -167,7 +167,7 @@ class TabMWP(datasets.GeneratorBasedBuilder):
                 yield int(k)-1, {
                     'question': v['question'],
                     'choices': v['choices'],
-                    'answer_text': v['answer'],
+                    'answer': v['answer'],
                     'unit': v['unit'],
                     'table_title': v['table_title'],
                     'table': self._convert_to_table(v['table_for_pd']),

@@ -40,5 +40,6 @@ class EvaluateTool(object):
                 summary[os.path.join(arg_path, key)] = metric
             # summary[os.path.join(arg_path, args.train.stop)] = summary_tmp[args.train.stop]
 
-        summary['avr'] = float(np.mean([float(v) for k, v in summary.items()]))
+        to_mean = ['acc', 'sacrebleu', 'all', 'all_ex', 'all_micro', 'exact_match']
+        summary['avr'] = float(np.mean([float(v) for k, v in summary.items() if os.path.basename(k) in to_mean]))
         return summary

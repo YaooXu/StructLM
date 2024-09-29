@@ -39,57 +39,24 @@ MISSING_CAP_TAG = "[TAB]"
 MISSING_CELL_TAG = "[CELL]"
 MISSING_HEADER_TAG = "[HEAD]"
 
-
-def convert_totto_table_format(table):
-    # 计算表格的列数
-    # num_columns = max([sum(cell["column_span"] for cell in row) for row in table])
-    num_columns = sum(cell["column_span"] for cell in table[0])
-    
-    try:
-        # 初始化一个空的表格结构，用于放置最终的 Markdown 表格数据
-        table_structure = [[""] * num_columns for _ in range(len(table))]
-        
-        for row_idx, row in enumerate(table):
-            col_idx = 0
-            for cell in row:
-                while table_structure[row_idx][col_idx] != "":
-                    col_idx += 1
-                
-                # 将单元格的值填入表格结构中
-                table_structure[row_idx][col_idx] = cell["value"]
-                
-                # 如果 column_span 或 row_span 大于 1，则填充跨越的单元格
-                for i in range(cell["row_span"]):
-                    if row_idx + i >= len(table_structure):
-                        break
-                    
-                    for j in range(cell["column_span"]):
-                        if i == 0 and j == 0:
-                            continue
-                        if col_idx + j >= num_columns:
-                            break
-                        
-                        table_structure[row_idx + i][col_idx + j] = cell["value"]
-
-        return {
-            'header': table_structure[0],
-            'rows': table_structure[1:]
-        }
-    except:
-        return {
-            'header': None,
-            'rows': None
-        }
+import multiprocessing
+# 创建一个锁字典来存储不同 zip 文件路径对应的锁
+lock_dict = defaultdict(multiprocessing.Lock)
 
 def convert_kg_tups_bidir(kg_tuples):
     new_kg_tuples = []
     for tup in kg_tuples:
         new_kg_tuples.append([f'Node: {tup[0]}', f'Relation: {tup[1]}', f'Node: {tup[2]}'])
-        # new_kg_tuples.append([f'Node: {tup[2]}', f'Inverse Relation: {tup[1]}', f'Node: {tup[0]}'])
+        new_kg_tuples.append([f'Node: {tup[2]}', f'Inverse Relation: {tup[1]}', f'Node: {tup[0]}'])
     return new_kg_tuples
 
 
 def obtain_samples(process_idx, idxes_to_process, cache_dir):
+    def get_zip_file_and_name(sample):
+        zip_file_path = f"{cache_dir}/{sample['task']}/{sample['task_id'] // 2000}.zip"
+        graph_name = f"graph_{sample['task_id']}.pkl"
+        return zip_file_path, graph_name
+
     if cache_graphs:
         llm = AutoModel.from_pretrained(
             model_path,
@@ -120,7 +87,12 @@ def obtain_samples(process_idx, idxes_to_process, cache_dir):
 
             sample["graph"] = graph
             if graph:
+                zip_file_path, graph_name = get_zip_file_and_name(sample)
                 if cache_graphs:
+                    parent_dir = os.path.dirname(zip_file_path)
+                    if not os.path.exists(parent_dir):
+                        os.makedirs(parent_dir, exist_ok=True)
+
                     graph = sample.pop("graph")
 
                     embedding_s = get_sentence_embeds(llm, tokenizer, torch.LongTensor(graph["x_s"]).to(llm.device), batch_size=2048)
@@ -131,21 +103,19 @@ def obtain_samples(process_idx, idxes_to_process, cache_dir):
 
                     del embedding_s, embedding_t
 
-                    zip_file_path = f"{cache_dir}/{sample['idx'] // 1000}.zip"
-                    with zipfile.ZipFile(zip_file_path, 'a', zipfile.ZIP_DEFLATED) as zipf:
-                        graph_name = f"graph_{sample['idx']}.pkl"
-                        sample["graph_path"] = (zip_file_path, graph_name)
-                        
-                        serialized_dict = pickle.dumps(graph)
-                        zipf.writestr(graph_name, serialized_dict)
+                    lock = lock_dict[zip_file_path]
+                    with lock:
+                        with zipfile.ZipFile(zip_file_path, 'a', zipfile.ZIP_DEFLATED) as zipf:
+                            sample["graph_path"] = (zip_file_path, graph_name)
+                            
+                            serialized_dict = pickle.dumps(graph)
+                            zipf.writestr(graph_name, serialized_dict)
                 else:
                     graph = sample.pop("graph")
 
-                    zip_file_path = f"{cache_dir}/{sample['idx'] // 1000}.zip"
-                    graph_name = f"graph_{sample['idx']}.pkl"
-
                     sample["graph_path"] = (zip_file_path, graph_name)
-                    new_samples.append(sample)
+
+                new_samples.append(sample)
         except Exception as e:
             print(e)
             continue
@@ -154,7 +124,7 @@ def obtain_samples(process_idx, idxes_to_process, cache_dir):
 
 if __name__ == "__main__":
 
-    n_process = 8 # num GPU
+    n_process = 64 # num GPU if cache
     shuffle = False
     model_path = "sentence-transformers/all-roberta-large-v1"
 
@@ -163,7 +133,7 @@ if __name__ == "__main__":
     output_dir = f"./data/hytrel/all-table-kg-schema-tasks"
     os.makedirs(output_dir, exist_ok=True)
 
-    cache_graphs = True
+    cache_graphs = False
     cache_dir = f"data/hytrel/all-table-kg-schema-tasks"
 
     tokenizer = AutoTokenizer.from_pretrained(model_path, device_map="auto")
@@ -214,9 +184,9 @@ if __name__ == "__main__":
             dataset.to_parquet(f"{output_dir}/test.pq")
             dataset.to_parquet(f"{output_dir}/val.pq")
 
-            df_excluded = df.drop(columns=remain_keys)
-            df_to_jsonl(df_excluded, f"{output_dir}/ori_test.jsonl")
-            df_to_jsonl(df_excluded, f"{output_dir}/ori_val.jsonl")
+            write_jsonl(f"{output_dir}/ori_test.jsonl", all_samples)
+            write_jsonl(f"{output_dir}/ori_val.jsonl", all_samples)
+
         else:
             df = pd.DataFrame(all_samples)
             dataset = Dataset.from_pandas(df)

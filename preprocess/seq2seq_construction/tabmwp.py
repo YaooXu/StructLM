@@ -46,7 +46,7 @@ class TrainDataset(Dataset):
                     extend_data = deepcopy(raw_data)
                     question = extend_data["question"]
                     table = extend_data['table']
-                    gold_result = extend_data['answer_text']
+                    gold_result = extend_data['answer']
 
                     table_context = copy.deepcopy(table)
                     # modify a table internally
@@ -54,7 +54,7 @@ class TrainDataset(Dataset):
                         truncate_func.truncate_table(table_context, question, gold_result)
                     # linearize a table into a string
                     linear_table = self.tab_processor.table_linearize_func.process_table(table_context)
-                    seq_out = self.tab_processor.process_output(gold_result)
+                    seq_out = gold_result
 
                     extend_data.update({"struct_in": linear_table.lower(),
                                         "text_in": question.lower(),
@@ -89,7 +89,7 @@ class DevDataset(Dataset):
                 extend_data = deepcopy(raw_data)
                 question = extend_data["question"]
                 table = extend_data['table']
-                gold_result = extend_data['answer_text']
+                gold_result = extend_data['answer']
 
                 table_context = copy.deepcopy(table)
                 # modify a table internally
@@ -97,7 +97,7 @@ class DevDataset(Dataset):
                     truncate_func.truncate_table(table_context, question, [])
                 # linearize a table into a string
                 linear_table = self.tab_processor.table_linearize_func.process_table(table_context)
-                seq_out = self.tab_processor.process_output(gold_result)
+                seq_out = gold_result
 
                 extend_data.update({"struct_in": linear_table.lower(),
                                     "text_in": question.lower(),
@@ -132,7 +132,7 @@ class TestDataset(Dataset):
                 extend_data = deepcopy(raw_data)
                 question = extend_data["question"]
                 table = extend_data['table']
-                gold_result = extend_data['answer_text']
+                gold_result = extend_data['answer']
 
                 table_context = copy.deepcopy(table)
                 # modify a table internally
@@ -140,7 +140,7 @@ class TestDataset(Dataset):
                     truncate_func.truncate_table(table_context, question, [])
                 # linearize a table into a string
                 linear_table = self.tab_processor.table_linearize_func.process_table(table_context)
-                seq_out = self.tab_processor.process_output(gold_result)
+                seq_out = gold_result
 
                 extend_data.update({"struct_in": linear_table.lower(),
                                     "text_in": question.lower(),

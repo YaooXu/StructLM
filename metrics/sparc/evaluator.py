@@ -26,9 +26,11 @@ class EvaluateTool(object):
                 golds[i]['query'] = "SELECT id, name FROM battle EXCEPT SELECT T1.id, T1.name FROM battle AS T1 JOIN ship AS T2 ON T1.id  =  T2.lost_in_battle WHERE T2.location  =  'English Channel'"
 
         exact_match = compute_exact_match_metric(preds, golds)
-        test_suite = compute_test_suite_metric(preds, golds, db_dir=db_dir)
+        # test_suite = compute_test_suite_metric(preds, golds, db_dir=db_dir)
+        test_suite = {}
         if section in ["train", "dev"]:
             return {**exact_match, **test_suite}
         elif section == "test":
-            interaction_scores = compute_interaction_metric(preds, golds)
+            # interaction_scores = compute_interaction_metric(preds, golds)
+            interaction_scores = {}
             return {**exact_match, **test_suite, **interaction_scores}

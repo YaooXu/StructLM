@@ -81,12 +81,15 @@ class QueryEmbedsGenerator(nn.Module):
 
 
 class StructQformer(nn.Module):
-    def __init__(self, args, hypergraph_enc_config) -> None:
+    def __init__(self, args, hypergraph_enc_config, **kwargs) -> None:
         super().__init__()
 
         self.args = args
         self.num_query_tokens = args.qformer.num_query_tokens
         self.strategy = args.qformer.strategy
+
+        self.roberta_config = AutoConfig.from_pretrained(args.qformer.model_name_or_path)
+        self.config = self.roberta_config
 
         if "inter" in self.strategy:
             self.query_embeds_generator = QueryEmbedsGenerator(self.num_query_tokens)
@@ -95,8 +98,6 @@ class StructQformer(nn.Module):
             self.graph_encoder = HyperGraphEncoder(hypergraph_enc_config)
             if self.args.qformer.freeze_encoder:
                 self.graph_encoder.requires_grad_(False)
-            
-            self.roberta_config = AutoConfig.from_pretrained(args.qformer.model_name_or_path)
 
             self.roberta_config.add_cross_attention = True
             self.roberta_config.is_decoder = True
@@ -128,14 +129,23 @@ class StructQformer(nn.Module):
 
             self.projector1 = nn.Linear(self.graph_encoder.config.hidden_size, self.roberta_config.hidden_size)
             self.ln_norm1 = nn.LayerNorm(self.graph_encoder.config.hidden_size)
+
+        elif self.strategy[:2] == "pt":             
+            self.query_token_embeds = nn.Parameter(torch.zeros(self.num_query_tokens, kwargs['llm_hidden_size']))
+            self.query_token_embeds.data.normal_(mean=0.0, std=kwargs['llm_initializer_range'])           
         else:
             raise NotImplementedError
         
-        self.config = self.roberta_config
-
     @property
     def device(self):
         return self.decoder.device
+
+    def gen_query_embeds_pt(self, qformer_inputs, llm, llm_graph_pad_token_id):
+        input_ids = qformer_inputs["input_ids"]
+        batch_size = input_ids.shape[0]
+        query_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
+
+        return query_embeds
 
     def gen_query_embeds_v2(self, qformer_inputs, llm, llm_graph_pad_token_id):
         input_ids = qformer_inputs["input_ids"]
@@ -197,6 +207,8 @@ class StructQformer(nn.Module):
     def gen_query_embeds(self, qformer_inputs, llm, llm_graph_pad_token_id):
         if self.strategy[:2] == "v2":
             query_embeds = self.gen_query_embeds_v2(qformer_inputs, llm, llm_graph_pad_token_id)
+        elif self.strategy[:2] == "pt":
+            query_embeds = self.gen_query_embeds_pt(qformer_inputs, llm, llm_graph_pad_token_id)
         else:
             raise NotImplementedError
 
@@ -287,19 +299,11 @@ class StructQformerLLM(nn.Module):
                 )
                 self.llm = get_peft_model(self.llm, peft_config)
                 self.llm.print_trainable_parameters()
-        elif self.args.qformer.model_finetuning_type == 'pt':
-            if args.llm.ckpt_path is not None:
-                logger.info(f"loading lora ckpt from {args.llm.ckpt_path}")
-                self.llm.load_adapter(args.llm.ckpt_path)
-            else:
-                logger.info("adding prompt tuning model")
-                peft_config = PromptTuningConfig(
-                    task_type=TaskType.CAUSAL_LM,
-                    prompt_tuning_init=PromptTuningInit.RANDOM,
-                    num_virtual_tokens=self.num_query_tokens,
-                )
-                self.llm = get_peft_model(self.llm, peft_config)
-                self.llm.print_trainable_parameters()
+        # elif args.llm.finetuning_type == 'pt':
+        #     self.llm.requires_grad_(False)
+
+        #     self.query_token_embeds = nn.Parameter(torch.zeros(args.qformer.num_query_tokens, self.llm.config.hidden_size))
+        #     self.query_token_embeds.data.normal_(mean=0.0, std=self.llm.config.initializer_range)
         elif args.llm.finetuning_type == "freeze":
             self.llm.requires_grad_(False)
         else:
@@ -307,7 +311,12 @@ class StructQformerLLM(nn.Module):
 
         # qformer
         if self.num_query_tokens > 0:
-            self.qformer = StructQformer(args, hypergraph_enc_config)
+
+            qformer_kwargs = {}
+            if self.args.qformer.strategy == 'pt':
+                qformer_kwargs['llm_hidden_size'] = self.llm.config.hidden_size
+                qformer_kwargs['llm_initializer_range'] = self.llm.config.initializer_range
+            self.qformer = StructQformer(args, hypergraph_enc_config, **qformer_kwargs)
 
             self.projector = nn.Linear(self.qformer.roberta_config.hidden_size, self.llm.config.hidden_size, dtype=kwargs["torch_dtype"])
             self.ln_norm = nn.LayerNorm(self.llm.config.hidden_size, dtype=kwargs["torch_dtype"])
@@ -316,10 +325,9 @@ class StructQformerLLM(nn.Module):
                 logger.info(f"loading qformer ckpt from {args.qformer.ckpt_path}")
 
                 state_dict = torch.load(args.qformer.ckpt_path)
-                state_dict = {k:v for k,v in state_dict.items() if 'query_token_embeds' not in k}
                 self.qformer.load_state_dict(
                     state_dict,
-                    strict=False
+                    # strict=False
                 )
 
             self.qformer = self.qformer.to(kwargs["torch_dtype"])
@@ -327,6 +335,9 @@ class StructQformerLLM(nn.Module):
             self.qformer = None
 
         if args.llm.ckpt_path is not None:
+            logger.info(f"loading all ckpt from {args.llm.ckpt_path}")
+            
+            # this ckpt also include qformer
             self.load_state_dict(
                 torch.load(os.path.join(args.llm.ckpt_path, "model.bin")),
                 strict=False
@@ -368,8 +379,13 @@ class StructQformerLLM(nn.Module):
 
         query_embeds = self.qformer.gen_query_embeds(qformer_inputs, self.llm, self.llm_graph_pad_token_id).to(inputs_embeds.dtype)
 
-        res_embeds = self.projector(query_embeds)
-        res_embeds = self.ln_norm(res_embeds)
+        if query_embeds.shape[-1] != inputs_embeds.shape[-1]:
+            # for v2
+            res_embeds = self.projector(query_embeds)
+            res_embeds = self.ln_norm(res_embeds)
+        else:
+            # prompt tunning
+            res_embeds = query_embeds
 
         graph_pad_st_idx = torch.argmax((input_ids == self.llm_graph_pad_token_id).int(), dim=1)
         graph_pad_ed_idx = graph_pad_st_idx + self.num_query_tokens

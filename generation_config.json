@@ -1,8 +1,0 @@
-{
-    "bos_token_id": 1,
-    "do_sample": false,
-    "eos_token_id": 2,
-    "pad_token_id": 0,
-    "max_length": 4096,
-    "max_new_tokens": 128
-}

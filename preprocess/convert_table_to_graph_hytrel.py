@@ -87,6 +87,8 @@ def obtain_samples(process_idx, idxes_to_process, cache_dir):
 
             sample["graph"] = graph
             if graph:
+                sample['num_nodes'] = graph['num_nodes'] + graph['num_hyperedges']
+
                 zip_file_path, graph_name = get_zip_file_and_name(sample)
                 if cache_graphs:
                     parent_dir = os.path.dirname(zip_file_path)
@@ -111,9 +113,14 @@ def obtain_samples(process_idx, idxes_to_process, cache_dir):
                             serialized_dict = pickle.dumps(graph)
                             zipf.writestr(graph_name, serialized_dict)
                 else:
-                    graph = sample.pop("graph")
 
-                    sample["graph_path"] = (zip_file_path, graph_name)
+                    if not pretraining:
+                        graph = sample.pop("graph")
+
+                        sample["graph_path"] = (zip_file_path, graph_name)
+                    else:
+                        # graph in remained in pretraining
+                        pass
 
                 new_samples.append(sample)
         except Exception as e:
@@ -128,9 +135,11 @@ if __name__ == "__main__":
     shuffle = False
     model_path = "sentence-transformers/all-roberta-large-v1"
 
+    # pretraining = True
+    # output_dir = f"./data/hytrel/llm_based_gnn_pretraining"
+    
     pretraining = False
-    # output_dir = f"./data/hytrel/all-table-tasks-v2"
-    output_dir = f"./data/hytrel/all-table-kg-schema-tasks"
+    output_dir = f"./data/hytrel/statistics"
     os.makedirs(output_dir, exist_ok=True)
 
     cache_graphs = False
@@ -143,10 +152,13 @@ if __name__ == "__main__":
     table_converter, graph_converter = TableConverter(tokenizer), GraphConverter(tokenizer)
 
     for path in (
-        "data/processed/custom_skginstruct.json",
-        "data/processed/custom_test_skginstruct.json",
+        # 'data/processed/llm_based_gnn_pretraining.pq',
+        # 'data/processed/statistic_train_skginstruct.json',
+        'data/processed/statistic_test_skginstruct.json',
+        # "data/processed/custom_skginstruct.json",
+        # "data/processed/custom_test_skginstruct.json",
     ):
-        all_samples = load_json(path=path)
+        all_samples = load_json(path=path) if path.endswith('json') else load_dataset("parquet", data_files=path, cache_dir='./data/.cache')['train']
         num_samples = len(all_samples)
         print(num_samples)
 
@@ -177,7 +189,7 @@ if __name__ == "__main__":
         if "test" in path:
             df = pd.DataFrame(all_samples)
 
-            remain_keys = ["label", "input", "graph_path"]
+            remain_keys = ["label", "input", "graph_path", "task", "num_nodes"]
             sub_df = df[remain_keys]
 
             dataset = Dataset.from_pandas(sub_df)

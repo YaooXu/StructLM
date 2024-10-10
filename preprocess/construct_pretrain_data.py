@@ -285,25 +285,25 @@ if __name__ == "__main__":
     model_path = "sentence-transformers/all-roberta-large-v1"
     num_proc = 1
 
-    # file_path = 'StructQformer/preprocess/table.pq'
-    # dataset = load_dataset("parquet", data_files=file_path)['train']
-    # dataset = dataset.select(range(10_000_000))
-    # processed_dataset1 = dataset.map(preprocess_table, batched=True, num_proc=num_proc, load_from_cache_file=False)
-    # print(len(processed_dataset1))
-
-    # processed_dataset1.to_parquet('data/hytrel/pretraining_10M_tables/train.pq')
-
-    # print(processed_dataset1[0]
-
-    file_path = 'StructQformer/preprocess/graph_1.2M.pq'
+    file_path = 'StructQformer/preprocess/table.pq'
     dataset = load_dataset("parquet", data_files=file_path)['train']
-    processed_dataset2 = dataset.map(preprocess_graph, batched=True, num_proc=num_proc, load_from_cache_file=False)
-    print(len(processed_dataset2))
-    
-    # repeat n times
-    N = 2
-    merged_dataset = concatenate_datasets([processed_dataset1] +  [processed_dataset2] * n)
+    dataset = dataset.select(range(10_000_000))
+    processed_dataset1 = dataset.map(preprocess_table, batched=True, num_proc=num_proc, load_from_cache_file=False)
+    print(len(processed_dataset1))
 
-    # # 查看合并后的数据集
-    # print(merged_dataset)
-    merged_dataset.to_parquet('data/hytrel/pretraining_10M_tables_1M_graph/train.pq')
+    processed_dataset1.to_parquet('data/hytrel/llm_pretraining_10M_tables/train.pq')
+
+    print(processed_dataset1[0])
+
+    # file_path = 'StructQformer/preprocess/graph_1.2M.pq'
+    # dataset = load_dataset("parquet", data_files=file_path)['train']
+    # processed_dataset2 = dataset.map(preprocess_graph, batched=True, num_proc=num_proc, load_from_cache_file=False)
+    # print(len(processed_dataset2))
+    
+    # # repeat n times
+    # N = 2
+    # merged_dataset = concatenate_datasets([processed_dataset1] +  [processed_dataset2] * n)
+
+    # # # 查看合并后的数据集
+    # # print(merged_dataset)
+    # merged_dataset.to_parquet('data/hytrel/pretraining_10M_tables_1M_graph/train.pq')

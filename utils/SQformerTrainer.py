@@ -258,7 +258,13 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
             )
         )
 
+        metrics = output.metrics
+
         predictions = self.post_process_function(predict_examples, output, self.tokenizer)
+        summary = eval_loose_json(easydict.EasyDict({}), data=predictions)
+        summary['eval_avr'] = summary.pop('avr')
+        output.metrics.update(summary)
+
         if self.args.should_log:
             cur_output_dir = f"{self.args.output_dir}/{metric_key_prefix}_{self.state.global_step}"
             os.makedirs(cur_output_dir, exist_ok=True)
@@ -267,12 +273,16 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
             with open(os.path.join(cur_output_dir, "predictions.json"), "w") as f:
                 json.dump(predictions, f)
 
-            summary = eval_loose_json(easydict.EasyDict(
-                {'json_file': os.path.join(cur_output_dir, "predictions.json")}
-            ))
-            self.log(summary)
+            with open(os.path.join(cur_output_dir, "predictions_summary.json"), "w") as f:
+                json.dump(summary, f, indent=4)
 
-        return output
+            # Only the main node log the results by default
+            self.log(metrics)
+
+        self.control = self.callback_handler.on_evaluate(
+            self.args, self.state, self.control, metrics
+        )
+        return metrics
 
     def prediction_step(
         self,

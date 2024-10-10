@@ -115,3 +115,14 @@ class Configure(object):
         args.dir.dataset = DEFAULT_DATASET_DIR
         args.dir.configure = DEFAULT_CONFIGURE_DIR
         return args
+
+    @staticmethod
+    def Get_from_file(cfg):
+        args = Configure.get_file_cfg(cfg)
+
+        if args.dir is not Args:
+            args.dir = Args()
+        args.dir.model = DEFAULT_MODEL_DIR
+        args.dir.dataset = DEFAULT_DATASET_DIR
+        args.dir.configure = DEFAULT_CONFIGURE_DIR
+        return args

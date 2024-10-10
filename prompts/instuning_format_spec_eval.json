@@ -158,7 +158,7 @@
     },
     "finqa": {
         "instruction": "Use the financial data in the following passage and table to calculate the answer the question.",
-        "input_format": "table:\n\n{struct_in}\n\n\nquestion:\n\n{text_in}",
+        "input_format": "table:\n\n{struct_in}\n\n\nquestion:\n\n{text_in}? write down a short python expression.",
         "output_format": "<seq_out>"
     },
     "infotabs": {

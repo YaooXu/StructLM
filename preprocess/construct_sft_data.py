@@ -45,17 +45,21 @@ with open(test_prompt_filepath, 'r') as f:
     test_prompts_dict = json.load(f)
 
 
-table_tasks = ["wikitq", "hybridqa", "fetaqa", "tabmwp", "wikisql", "tab_fact", "totto", "kvret"]
+table_tasks = ["wikitq", "hybridqa", "fetaqa", "tabmwp", "wikisql", "tab_fact", "totto", "kvret", "finqa", "sqa", 'wikitabletext', 'finqa']
 schema_tasks = ["spider", "sparc"]
 kg_tasks = ['compwebq', 'dart']
 
+with open('data/processed/1-shot_examples.jsonl', 'r', encoding='utf-8') as f:
+    lines = f.readlines()
+    examples = [json.loads(line) for line in lines]
+    examples = {list(e.keys())[0]: list(e.values())[0] for e in examples}
 
 def construct_processed_samples(tasks, prompts_dict, is_train, output_path):
     processed_samples = []
     for task_name in tasks:
         # error_cnt = 0
 
-        task_samples = [] 
+        task_samples = []
 
         print(task_name)
         raw_datasets_split = load_dataset(f"preprocess/tasks/{task_name}.py", trust_remote_code=True)
@@ -85,13 +89,21 @@ def construct_processed_samples(tasks, prompts_dict, is_train, output_path):
             struct_in = truncate_to_max_tokens(sample['struct_in'])
             seq_out = sample['seq_out']
 
-            input_ = input_format.format(struct_in=struct_in, text_in=text_in)
-            if '\n\n\n' in input_:
-                input_ = input_.replace('\n\n\n', '[GRAPH_PAD]')
-            else:
-                input_ += '[GRAPH_PAD]'
+            if not one_shot:
+                input_ = input_format.format(struct_in=struct_in, text_in=text_in)
+                if '\n\n\n' in input_:
+                    input_ = input_.replace('\n\n\n', '[GRAPH_PAD]')
+                else:
+                    input_ += '[GRAPH_PAD]'
+                
+                assert '[GRAPH_PAD]' in input_
 
-            final_input = prompt.format(instruction=instruction, input=input_)
+                final_input = prompt.format(instruction=instruction, input=input_)
+            else:
+                input_ = input_format.format(struct_in=struct_in, text_in=text_in)
+                final_input =  prompt.format(instruction=instruction, input=input_)
+                final_input = examples[task_name] + '\n\n' + final_input
+
             label = seq_out
 
             if is_train:
@@ -135,15 +147,24 @@ def construct_processed_samples(tasks, prompts_dict, is_train, output_path):
         # print('#error: ', error_cnt, '\n')
 
         print(processed_samples[-1]['input'])
+        print(processed_samples[-1]['label'])
 
     print(len(processed_samples))
     with open(output_path, 'w') as f:
         json.dump(processed_samples, f)
 
-all_tasks = table_tasks + schema_tasks + kg_tasks
-construct_processed_samples(all_tasks, train_prompts_dict, True, 'data/processed/custom_skginstruct.json')
-construct_processed_samples(all_tasks, test_prompts_dict, False, 'data/processed/custom_test_skginstruct.json')
+output_dir = 'data/processed'
+# all_tasks = ["wikitq", "hybridqa", "fetaqa", "tabmwp", "wikisql", "tab_fact", "totto", "kvret", 'compwebq', 'dart']
+# construct_processed_samples(all_tasks, train_prompts_dict, True, f'{output_dir}/custom_skginstruct.json')
 
-# all_tasks = ['spider']
-# construct_processed_samples(all_tasks, train_prompts_dict, True, 'custom_skginstruct.json')
-# construct_processed_samples(all_tasks, test_prompts_dict, False, 'custom_test_skginstruct.json')
+# all_tasks += ['sqa', 'wikitabletext', 'finqa']
+# construct_processed_samples(all_tasks, test_prompts_dict, False, f'{output_dir}/custom_test_skginstruct.json')
+
+# one_shot = True
+# construct_processed_samples(all_tasks, test_prompts_dict, False, 'data/processed/one_shot_test_skginstruct.json')
+
+one_shot = False
+all_tasks = ['sqa', 'wikitabletext', 'finqa'] + ["wikitq", "hybridqa", "fetaqa", "tabmwp", "wikisql", "tab_fact", "totto", "kvret", 'compwebq', 'dart']
+
+# construct_processed_samples(all_tasks, test_prompts_dict, True, 'data/processed/statistic_train_skginstruct.json')
+construct_processed_samples(all_tasks, test_prompts_dict, False, 'data/processed/statistic_test_skginstruct.json')

@@ -256,8 +256,18 @@ class GraphDataset(Dataset):
 
             graph = sample['graph']
         else:
+            # not used
             question = ''
-            label = sample['label']
+
+            if type(sample['input']) is list:
+                # pretraining gnn and g-former based on llm
+                idx = random.choice(range(len(sample['input'])))
+
+                input_ = sample['input'][idx]
+                label = sample['label'][idx]
+            else:
+                input_ = sample['input']
+                label = sample['label']
 
         if 'graph_path' in sample:
             # use cache
@@ -298,16 +308,16 @@ class GraphDataset(Dataset):
         if self.sqformer_pretraining:
             return item
 
-        assert '[GRAPH_PAD]' in sample['input']
+        assert '[GRAPH_PAD]' in input_
         if self.num_query_tokens > 0:
-            sample['input'] = sample['input'].replace('[GRAPH_PAD]', \
+            input_ = input_.replace('[GRAPH_PAD]', \
                 f'\n\nstruct data representation tokens: {DEFAULT_GRAPH_PAD_TOKEN * self.num_query_tokens}\n\n\n')
         else:
-            sample['input'] = sample['input'].replace('[GRAPH_PAD]', '\n\n\n')
+            input_ = input_.replace('[GRAPH_PAD]', '\n\n\n')
                 
         # llm input and target
-        tokenized_input = self.llm_tokenizer(sample['input'], return_attention_mask=False, add_special_tokens=False)
-        tokenized_target = self.llm_tokenizer(sample['label'], return_attention_mask=False, add_special_tokens=False)
+        tokenized_input = self.llm_tokenizer(input_, return_attention_mask=False, add_special_tokens=False)
+        tokenized_target = self.llm_tokenizer(label, return_attention_mask=False, add_special_tokens=False)
         s = [self.llm_tokenizer.bos_token_id] + tokenized_input["input_ids"]
         t = tokenized_target["input_ids"] + [self.llm_tokenizer.eos_token_id]
 
@@ -396,6 +406,8 @@ class DataCollatorForGraphSupervisedDataset(object):
         input_ids = self.llm_tokenizer.pad({"input_ids": input_ids})["input_ids"]
         labels = self._pad_labels(labels, self.llm_tokenizer.padding_side)
         attention_mask = input_ids.ne(self.llm_tokenizer.pad_token_id)
+        attention_mask[:, -1] = True
+
 
         batch.update({
             "input_ids": input_ids,

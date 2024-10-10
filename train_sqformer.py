@@ -41,7 +41,7 @@ import wandb
 import numpy as np
 from collections import OrderedDict
 from utils.utils import load_jsonl, print_trainable_params
-
+import glob
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 class WarppedTrainingArguments(TrainingArguments):
 
     # data args
-    dataset_dir: str = field(default="dataset/webqsp/processed_files")
+    dataset_dir: str = field(default=None)
     max_desc_length: int = field(default=2048)
     max_seq_length: int = field(default=2560)
     preprocessing_num_workers: int = field(default=8)
@@ -64,7 +64,7 @@ class WarppedTrainingArguments(TrainingArguments):
 
     remove_unused_columns: int = field(default=False)
 
-    generation_config: str = field(default="generation_config.json")
+    generation_config = None
 
     predict_with_generate: bool = field(default=True)
 
@@ -74,12 +74,24 @@ class WarppedTrainingArguments(TrainingArguments):
 
     disable_tqdm: bool = False
 
+    ckpt_dir: str = field(default=None)
+
 
 if __name__ == "__main__":
     parser = transformers.HfArgumentParser((WarppedTrainingArguments))
     (training_args,) = parser.parse_args_into_dataclasses()
 
-    model_args = Configure.Get(training_args.cfg)
+    if training_args.ckpt_dir is not None:
+        assert training_args.do_predict
+        cfg_file = glob.glob(os.path.join(training_args.ckpt_dir, '*.cfg'))[0]
+        logger.info(f'loading cfg file from {cfg_file}')
+        
+        model_args = Configure.Get_from_file(cfg_file)
+        model_args.qformer.ckpt_path = None
+        model_args.llm.ckpt_path = training_args.ckpt_dir
+        
+    else:
+        model_args = Configure.Get(training_args.cfg)
 
     training_args.run_name = training_args.cfg
 
@@ -210,7 +222,12 @@ if __name__ == "__main__":
 
         trainer.train(resume_from_checkpoint=latest_checkpoint)
 
-    elif training_args.do_predict:
+    if training_args.do_predict:
         trainer.data_collator = DataCollatorForGenerating(llm_tokenizer, encoder_tokenizer)
         logger.info("*** Predict ***")
-        metrics = trainer.predict(test_dataset, test_examples)
+        gen_config = {
+                "do_sample": False,
+                "max_new_tokens": 256,
+                "pad_token_id": llm_tokenizer.eos_token_id,
+            }
+        metrics = trainer.predict(test_dataset, test_examples, **gen_config)

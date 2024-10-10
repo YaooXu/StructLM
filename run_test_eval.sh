@@ -7,7 +7,7 @@ GPU=0,1
 INP_MAX_LEN=${2:-2176}
 EVAL_BSIZE=${3:-64}
 
-OUTPUT_DIR=ori_StructLM_outputs/shuffle_all_${CFG_PREFIX}
+OUTPUT_DIR=ori/${CFG_PREFIX}
 
 kwargs=" 
 --overwrite_output_dir \

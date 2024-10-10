@@ -15,7 +15,10 @@ def eval_loose_json(args, data=None, record_results=False):
     if '<|end_of_text|>' in data[0]['prediction']:
         for item in data:
             item['prediction'] = item['prediction'].split('<|end_of_text|>')[0].strip('"')
-  
+    if '<|endoftext|>' in data[0]['prediction']:
+        for item in data:
+            item['prediction'] = item['prediction'].split('<|endoftext|>')[0].strip('"')
+
     preds = [item['prediction'].split('<s>')[-1].split('\n\n')[0].strip() for item in data]
     labs = data
     summary = evaluator.evaluate(preds, labs, "test")

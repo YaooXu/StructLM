@@ -12,4 +12,6 @@
 
 # export HF_HOME=/mnt/publiccache/huggingface
 
-huggingface-cli download --repo-type=dataset --local-dir=data/processed/ TIGER-Lab/SKGInstruct ./skginstruct_test_file_7b.json 
+# huggingface-cli download --repo-type=dataset --local-dir=data/processed/ TIGER-Lab/SKGInstruct ./skginstruct_test_file_7b.json 
+
+huggingface-cli download --repo-type=model osunlp/TableLlama

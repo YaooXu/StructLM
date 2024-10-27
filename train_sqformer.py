@@ -32,7 +32,7 @@ from torch.utils.data import DataLoader
 from torch.optim.optimizer import Optimizer as Optimizer
 from torch.optim.lr_scheduler import LambdaLR
 from torch.nn.modules import Module
-from utils.SQformerTrainer import (
+from utils.LLaSATrainer import (
     StructQASeq2SeqTrainer,
     PredictionProgressCallback,
     post_process_function,

@@ -14,7 +14,7 @@ from transformers import (
     set_seed,
     EarlyStoppingCallback,
 )
-from models import StructQformerLLM, StructQformer
+from models import LLaSA, StructQformer
 from dataset.SQformer_dataset_hytrel import (
     DEFAULT_GRAPH_PAD_TOKEN,
     DataCollatorForGenerating,
@@ -108,9 +108,8 @@ if __name__ == "__main__":
     if training_args.should_log:
         # The default of training_args.log_level is passive, so we set log level at info here to have that default.
         transformers.utils.logging.set_verbosity_info()
-
-    log_level = training_args.get_process_log_level()
-    logger.setLevel(log_level)
+    else:
+        transformers.utils.logging.set_verbosity_error()
 
     llm_tokenizer = AutoTokenizer.from_pretrained(model_args.llm.model_name_or_path, use_fast=False)
     if llm_tokenizer.pad_token is None:
@@ -136,7 +135,7 @@ if __name__ == "__main__":
     if model_args.qformer.pretraining:
         model = StructQformer(model_args, hypergraph_enc_config)
     else:
-        model = StructQformerLLM(
+        model = LLaSA(
             model_args,
             hypergraph_enc_config,
             llm_tokenizer,
@@ -145,6 +144,7 @@ if __name__ == "__main__":
             torch_dtype=torch_dtype,
         )
 
+    print(training_args.should_log)
     if training_args.should_log:
         print_trainable_params(model)
 

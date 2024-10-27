@@ -17,7 +17,7 @@ from transformers import (
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 
 # from models.base_models.modeling_llama import LlamaForCausalLM
-from models.base_models.modeling_t5_qformer import T5ForConditionalGeneration
+# from models.base_models.modeling_t5_qformer import T5ForConditionalGeneration
 from models.graphormer.graphormer import Graphormer
 
 from models.hytrel import HyperGraphEncoder
@@ -263,7 +263,7 @@ class StructQformer(nn.Module):
 
         return outputs
 
-class StructQformerLLM(nn.Module):
+class LLaSA(nn.Module):
     def __init__(self, args, hypergraph_enc_config, llm_tokenizer, encoder_tokenizer, **kwargs) -> None:
         super().__init__()
 
@@ -277,7 +277,9 @@ class StructQformerLLM(nn.Module):
 
         # llm
         self.llm: AutoModelForCausalLM = AutoModelForCausalLM.from_pretrained(
-            args.llm.model_name_or_path, attn_implementation=args.llm.attn_implementation, **kwargs
+            args.llm.model_name_or_path, 
+            attn_implementation=args.llm.attn_implementation, 
+            **kwargs
         )
         self.init_tokenizer_and_embeds(llm_tokenizer, encoder_tokenizer, DEFAULT_GRAPH_PAD_TOKEN)
 
@@ -371,7 +373,7 @@ class StructQformerLLM(nn.Module):
         llm_tokenizer.add_tokens([graph_pad_token], special_tokens=True)
         self.llm_graph_pad_token_id = llm_tokenizer.convert_tokens_to_ids([DEFAULT_GRAPH_PAD_TOKEN])[0]
         self.llm_pad_token_id = llm_tokenizer.pad_token_id
-        llm.resize_token_embeddings(len(llm_tokenizer))
+        llm.resize_token_embeddings(len(llm_tokenizer), mean_resizing=False)
 
     def construct_inputs_embeds(self, input_ids, qformer_inputs):
         inputs_embeds = self.llm.get_input_embeddings()(input_ids)
@@ -414,6 +416,7 @@ class StructQformerLLM(nn.Module):
         output_attentions: bool | None = None,
         output_hidden_states: bool | None = None,
         return_dict: bool | None = None,
+        **loss_kwargs, # For compatibility with the transformers >= 4.46, https://github.com/huggingface/transformers/issues/34263
     ):
         if self.num_query_tokens > 0:
             inputs_embeds = self.construct_inputs_embeds(input_ids, qformer_inputs)
@@ -429,6 +432,7 @@ class StructQformerLLM(nn.Module):
                 output_attentions=output_attentions,
                 output_hidden_states=output_hidden_states,
                 return_dict=return_dict,
+                **loss_kwargs,
             )
         else:
             outputs = self.llm(
@@ -441,6 +445,7 @@ class StructQformerLLM(nn.Module):
                 output_attentions=output_attentions,
                 output_hidden_states=output_hidden_states,
                 return_dict=return_dict,
+                **loss_kwargs,
             )
 
         return outputs

@@ -18,3 +18,4 @@ configure/
 cache
 
 *.pq
+download.*

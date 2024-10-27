@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Optional, Union
 from transformers.modeling_utils import unwrap_model
 from transformers.trainer_utils import speed_metrics
 from transformers.trainer_callback import TrainerControl, TrainerState
-from transformers.deepspeed import is_deepspeed_zero3_enabled
+from transformers.integrations.deepspeed  import is_deepspeed_zero3_enabled
 from transformers.data.data_collator import DataCollator
 from transformers import (
     EvalPrediction,

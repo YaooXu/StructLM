@@ -105,24 +105,21 @@ class Encoder(nn.Module):
     edge_index2 = torch.cat([data.edge_index2, self_edge_index2.to(data.edge_index2.device)], dim=-1)
 
     x_s_idxes = data["x_s_ptr"].tolist()
-    all_layers_embeds = []
 
     for i, layer_module in enumerate(self.layer):
       embedding_s, embedding_t = layer_module(embedding_s, embedding_t, edge_index1, edge_index2)
 
-      list_graph_embeds = []
-      for i in range(len(x_s_idxes) - 1):
-        graph_embeds = embedding_s[x_s_idxes[i] : x_s_idxes[i + 1], :]  # s_nodes
-        list_graph_embeds.append(graph_embeds)
-      graph_embeds = torch.nn.utils.rnn.pad_sequence(list_graph_embeds, batch_first=True).to(embedding_s.device)
-      all_layers_embeds.append(graph_embeds)
-
     list_graph_attn = []
+    list_graph_embeds = []
     for i in range(len(x_s_idxes) - 1):
+        graph_embeds = embedding_s[x_s_idxes[i] : x_s_idxes[i + 1], :]  # s_nodes
         list_graph_attn.append(torch.LongTensor([1] * (x_s_idxes[i + 1] - x_s_idxes[i])))
+        list_graph_embeds.append(graph_embeds)
+        
     graph_attention_mask = torch.nn.utils.rnn.pad_sequence(list_graph_attn, batch_first=True).to(embedding_s.device)
+    graph_embeds = torch.nn.utils.rnn.pad_sequence(list_graph_embeds, batch_first=True).to(embedding_s.device)
 
-    return all_layers_embeds, graph_attention_mask
+    return graph_embeds, graph_attention_mask
 
 
 

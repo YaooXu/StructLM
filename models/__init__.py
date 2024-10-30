@@ -1,1 +1,1 @@
-from .LLaSA import LLaSA, StructQformer
+from .LLaSA import LLaSA, GFormer

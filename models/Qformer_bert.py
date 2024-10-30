@@ -47,6 +47,7 @@ from transformers.models.bert.configuration_bert import BertConfig
 
 logger = logging.get_logger(__name__)
 
+
 class BertEmbeddings(nn.Module):
     """Construct the embeddings from word and position embeddings."""
 
@@ -72,11 +73,13 @@ class BertEmbeddings(nn.Module):
             config, "position_embedding_type", "absolute"
         )
 
+        self.config = config
+
     def forward(
         self,
         input_ids=None,
         position_ids=None,
-        inputs_embeds=None,
+        query_embeds=None,
         past_key_values_length=0,
     ):
         if input_ids is not None:
@@ -95,14 +98,15 @@ class BertEmbeddings(nn.Module):
                 position_embeddings = self.position_embeddings(position_ids)
                 embeddings = embeddings + position_embeddings
 
-            if inputs_embeds is not None:
-                embeddings = torch.cat((inputs_embeds, embeddings), dim=1)
+            if query_embeds is not None:
+                embeddings = torch.cat((query_embeds, embeddings), dim=1)
         else:
-            embeddings = inputs_embeds
+            embeddings = query_embeds
 
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings
+
 
 class BertSelfAttention(nn.Module):
     def __init__(self, config, is_cross_attention):
@@ -179,12 +183,8 @@ class BertSelfAttention(nn.Module):
         is_cross_attention = encoder_hidden_states is not None
 
         if is_cross_attention:
-            if type(encoder_hidden_states) == tuple:
-                key_layer = encoder_hidden_states[0]
-                value_layer = encoder_hidden_states[1]
-            else:
-                key_layer = self.transpose_for_scores(self.key(encoder_hidden_states))
-                value_layer = self.transpose_for_scores(self.value(encoder_hidden_states))
+            key_layer = self.transpose_for_scores(self.key(encoder_hidden_states))
+            value_layer = self.transpose_for_scores(self.value(encoder_hidden_states))
             attention_mask = encoder_attention_mask
         elif past_key_value is not None:
             key_layer = self.transpose_for_scores(self.key(hidden_states))
@@ -427,21 +427,21 @@ class BertLayer(nn.Module):
         present_key_value = self_attention_outputs[-1]
 
         if query_length > 0:
-            # query_attention_output = attention_output[:, -query_length:, :]
+            query_attention_output = attention_output[:, :query_length, :]
 
             if self.has_cross_attention:
                 assert (
                     encoder_hidden_states is not None
                 ), "encoder_hidden_states must be given for cross-attention layers"
                 cross_attention_outputs = self.crossattention(
-                    attention_output,
+                    query_attention_output,
                     attention_mask,
                     head_mask,
                     encoder_hidden_states,
                     encoder_attention_mask,
                     output_attentions=output_attentions,
                 )
-                attention_output = cross_attention_outputs[0]
+                query_attention_output = cross_attention_outputs[0]
                 outputs = (
                     outputs + cross_attention_outputs[1:-1]
                 )  # add cross attentions if we output attention weights
@@ -450,7 +450,7 @@ class BertLayer(nn.Module):
                 self.feed_forward_chunk_query,
                 self.chunk_size_feed_forward,
                 self.seq_len_dim,
-                attention_output[:, :query_length, :],
+                query_attention_output,
             )
             if attention_output.shape[1] > query_length:
                 layer_output_text = apply_chunking_to_forward(
@@ -521,10 +521,7 @@ class BertEncoder(nn.Module):
 
             layer_head_mask = head_mask[i] if head_mask is not None else None
             past_key_value = past_key_values[i] if past_key_values is not None else None
-            if type(encoder_hidden_states) == tuple:
-                layer_encoder_hidden_states = encoder_hidden_states[i]
-            else:
-                layer_encoder_hidden_states = encoder_hidden_states
+
             if getattr(self.config, "gradient_checkpointing", False) and self.training:
 
                 if use_cache:
@@ -546,7 +543,7 @@ class BertEncoder(nn.Module):
                     hidden_states,
                     attention_mask,
                     layer_head_mask,
-                    layer_encoder_hidden_states,
+                    encoder_hidden_states,
                     encoder_attention_mask,
                 )
             else:
@@ -554,7 +551,7 @@ class BertEncoder(nn.Module):
                     hidden_states,
                     attention_mask,
                     layer_head_mask,
-                    layer_encoder_hidden_states,
+                    encoder_hidden_states,
                     encoder_attention_mask,
                     past_key_value,
                     output_attentions,
@@ -751,26 +748,25 @@ class BertModel(BertPreTrainedModel):
                     seq_ids[None, None, :].repeat(batch_size, seq_length, 1)
                     <= seq_ids[None, :, None]
                 )
-                # causal_mask = torch.ones_like(causal_mask)
 
                 # add a prefix ones mask to the causal mask
                 # causal and attention masks must have same type with pytorch version < 1.3
-                causal_mask = causal_mask.to(attention_mask.dtype) # [batch, to_seq_len, to_seq_len]
+                causal_mask = causal_mask.to(attention_mask.dtype)
 
                 if causal_mask.shape[1] < attention_mask.shape[1]:
                     prefix_seq_len = attention_mask.shape[1] - causal_mask.shape[1]
-                    # if has_query:  # UniLM style attention mask
-                    #     causal_mask = torch.cat(
-                    #         [
-                    #             torch.zeros(
-                    #                 (batch_size, prefix_seq_len, seq_length),
-                    #                 device=device,
-                    #                 dtype=causal_mask.dtype,
-                    #             ),
-                    #             causal_mask,
-                    #         ],
-                    #         axis=1,
-                    #     )
+                    if has_query:  # UniLM style attention mask
+                        causal_mask = torch.cat(
+                            [
+                                torch.zeros(
+                                    (batch_size, prefix_seq_len, seq_length),
+                                    device=device,
+                                    dtype=causal_mask.dtype,
+                                ),
+                                causal_mask,
+                            ],
+                            axis=1,
+                        )
                     causal_mask = torch.cat(
                         [
                             torch.ones(
@@ -808,7 +804,6 @@ class BertModel(BertPreTrainedModel):
     def forward(
         self,
         input_ids=None,
-        inputs_embeds=None,
         attention_mask=None,
         position_ids=None,
         head_mask=None,
@@ -820,7 +815,6 @@ class BertModel(BertPreTrainedModel):
         output_attentions=None,
         output_hidden_states=None,
         return_dict=None,
-        query_length=0,
         is_decoder=False,
     ):
         r"""
@@ -857,32 +851,26 @@ class BertModel(BertPreTrainedModel):
 
         # use_cache = use_cache if use_cache is not None else self.config.use_cache
 
-        # if input_ids is None:
-        #     assert (
-        #         query_embeds is not None
-        #     ), "You have to specify query_embeds when input_ids is None"
+        if input_ids is None:
+            assert (
+                query_embeds is not None
+            ), "You have to specify query_embeds when input_ids is None"
 
         # past_key_values_length
         past_key_values_length = (
-            # past_key_values[0][0].shape[2] - self.config.query_length
-            past_key_values[0][0].shape[2]
+            past_key_values[0][0].shape[2] - self.config.query_length
             if past_key_values is not None
             else 0
         )
 
-        # query_length = query_embeds.shape[1] if query_embeds is not None else 0
-        # query_length = input_ids.shape[1] if input_ids is not None else inputs_embeds.shape[1]
-        # query_length = 0
-        
-        if inputs_embeds is not None:
-            embedding_output = inputs_embeds
-        else:
-            embedding_output = self.embeddings(
-                input_ids=input_ids,
-                position_ids=position_ids,
-                inputs_embeds=query_embeds,
-                past_key_values_length=past_key_values_length,
-            )
+        query_length = query_embeds.shape[1] if query_embeds is not None else 0
+
+        embedding_output = self.embeddings(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            query_embeds=query_embeds,
+            past_key_values_length=past_key_values_length,
+        )
 
         input_shape = embedding_output.size()[:-1]
         batch_size, seq_length = input_shape
@@ -898,7 +886,7 @@ class BertModel(BertPreTrainedModel):
         if is_decoder:
             extended_attention_mask = self.get_extended_attention_mask(
                 attention_mask,
-                input_shape,
+                input_ids.shape,
                 device,
                 is_decoder,
                 has_query=(query_embeds is not None),
@@ -911,11 +899,10 @@ class BertModel(BertPreTrainedModel):
         # If a 2D or 3D attention mask is provided for the cross-attention
         # we need to make broadcastable to [batch_size, num_heads, seq_length, seq_length]
         if encoder_hidden_states is not None:
-            if type(encoder_hidden_states) == tuple:
-                # encoder_states in past_key_values
-                encoder_batch_size, _,  encoder_sequence_length, _ = encoder_hidden_states[
+            if type(encoder_hidden_states) == list:
+                encoder_batch_size, encoder_sequence_length, _ = encoder_hidden_states[
                     0
-                ][0].size()
+                ].size()
             else:
                 (
                     encoder_batch_size,
@@ -1000,7 +987,6 @@ class BertLMHeadModel(BertPreTrainedModel):
     def forward(
         self,
         input_ids=None,
-        inputs_embeds=None,
         attention_mask=None,
         position_ids=None,
         head_mask=None,
@@ -1054,12 +1040,11 @@ class BertLMHeadModel(BertPreTrainedModel):
         )
         if labels is not None:
             use_cache = False
-        # if past_key_values is not None:
-        #     query_embeds = None
+        if past_key_values is not None:
+            query_embeds = None
 
         outputs = self.bert(
             input_ids,
-            inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
             position_ids=position_ids,
             head_mask=head_mask,
@@ -1074,42 +1059,40 @@ class BertLMHeadModel(BertPreTrainedModel):
             is_decoder=is_decoder,
         )
 
-        return outputs
-    
-        # sequence_output = outputs[0]
-        # if query_embeds is not None:
-        #     sequence_output = outputs[0][:, query_embeds.shape[1] :, :]
+        sequence_output = outputs[0]
+        if query_embeds is not None:
+            sequence_output = outputs[0][:, query_embeds.shape[1] :, :]
 
-        # prediction_scores = self.cls(sequence_output)
+        prediction_scores = self.cls(sequence_output)
 
-        # if return_logits:
-        #     return prediction_scores[:, :-1, :].contiguous()
+        if return_logits:
+            return prediction_scores[:, :-1, :].contiguous()
 
-        # lm_loss = None
-        # if labels is not None:
-        #     # we are doing next-token prediction; shift prediction scores and input ids by one
-        #     shifted_prediction_scores = prediction_scores[:, :-1, :].contiguous()
-        #     labels = labels[:, 1:].contiguous()
-        #     loss_fct = CrossEntropyLoss(reduction=reduction, label_smoothing=0.1)
-        #     lm_loss = loss_fct(
-        #         shifted_prediction_scores.view(-1, self.config.vocab_size),
-        #         labels.view(-1),
-        #     )
-        #     if reduction == "none":
-        #         lm_loss = lm_loss.view(prediction_scores.size(0), -1).sum(1)
+        lm_loss = None
+        if labels is not None:
+            # we are doing next-token prediction; shift prediction scores and input ids by one
+            shifted_prediction_scores = prediction_scores[:, :-1, :].contiguous()
+            labels = labels[:, 1:].contiguous()
+            loss_fct = CrossEntropyLoss(reduction=reduction, label_smoothing=0.1)
+            lm_loss = loss_fct(
+                shifted_prediction_scores.view(-1, self.config.vocab_size),
+                labels.view(-1),
+            )
+            if reduction == "none":
+                lm_loss = lm_loss.view(prediction_scores.size(0), -1).sum(1)
 
-        # if not return_dict:
-        #     output = (prediction_scores,) + outputs[2:]
-        #     return ((lm_loss,) + output) if lm_loss is not None else output
+        if not return_dict:
+            output = (prediction_scores,) + outputs[2:]
+            return ((lm_loss,) + output) if lm_loss is not None else output
 
-        # return CausalLMOutputWithCrossAttentions(
-        #     loss=lm_loss,
-        #     logits=prediction_scores,
-        #     past_key_values=outputs.past_key_values,
-        #     hidden_states=outputs.hidden_states,
-        #     attentions=outputs.attentions,
-        #     cross_attentions=outputs.cross_attentions,
-        # )
+        return CausalLMOutputWithCrossAttentions(
+            loss=lm_loss,
+            logits=prediction_scores,
+            past_key_values=outputs.past_key_values,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+            cross_attentions=outputs.cross_attentions,
+        )
 
     def prepare_inputs_for_generation(
         self, input_ids, query_embeds, past=None, attention_mask=None, **model_kwargs
@@ -1231,52 +1214,3 @@ class BertForMaskedLM(BertPreTrainedModel):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
-
-if __name__ == "__main__":
-    def init_Qformer(cls, num_query_token, encoder_width, cross_attention_freq=2):
-        encoder_config = BertConfig.from_pretrained("bert-base-uncased")
-        encoder_config.encoder_width = encoder_width
-        # insert cross-attention layer every other block
-        encoder_config.add_cross_attention = True
-        encoder_config.cross_attention_freq = cross_attention_freq
-        encoder_config.query_length = num_query_token
-        Qformer = BertLMHeadModel.from_pretrained(
-            "bert-base-uncased", config=encoder_config
-        )
-        query_tokens = nn.Parameter(
-            torch.zeros(1, num_query_token, encoder_config.hidden_size)
-        )
-        query_tokens.data.normal_(mean=0.0, std=encoder_config.initializer_range)
-        return Qformer, query_tokens
-
-    query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
-
-    image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to(
-            image.device
-        )
-    query_output = self.Qformer.bert(
-        query_embeds=query_tokens, 
-        encoder_hidden_states=image_embeds,
-        encoder_attention_mask=image_atts,
-        use_cache=True,
-        return_dict=True,
-    )
-    
-    
-    decoder_input_ids = text_tokens.input_ids.clone()
-    decoder_input_ids[:, 0] = self.tokenizer.bos_token_id
-    labels = decoder_input_ids.masked_fill(
-        decoder_input_ids == self.tokenizer.pad_token_id, -100
-    )
-
-    query_atts = torch.ones(query_tokens.size()[:-1], dtype=torch.long).to(
-        image.device
-    )
-    attention_mask = torch.cat([query_atts, text_tokens.attention_mask], dim=1)
-    lm_output = self.Qformer(
-        decoder_input_ids,
-        attention_mask=attention_mask,
-        past_key_values=query_output.past_key_values,
-        return_dict=True,
-        labels=labels,
-    )

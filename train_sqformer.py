@@ -14,7 +14,7 @@ from transformers import (
     set_seed,
     EarlyStoppingCallback,
 )
-from models import LLaSA, StructQformer
+from models import LLaSA, GFormer
 from dataset.SQformer_dataset_hytrel import (
     DEFAULT_GRAPH_PAD_TOKEN,
     DataCollatorForGenerating,
@@ -102,7 +102,7 @@ if __name__ == "__main__":
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
-        level=logging.INFO if training_args.local_rank in [-1, 0] else logging.WARN,
+        level=logging.INFO if training_args.should_log else logging.ERROR,
         handlers=[logging.StreamHandler(sys.stdout)],
     )
     if training_args.should_log:
@@ -133,7 +133,7 @@ if __name__ == "__main__":
         hypergraph_enc_config.update({k:v for k,v in model_args.hytrel})
 
     if model_args.qformer.pretraining:
-        model = StructQformer(model_args, hypergraph_enc_config)
+        model = GFormer(model_args, hypergraph_enc_config)
     else:
         model = LLaSA(
             model_args,
@@ -144,7 +144,6 @@ if __name__ == "__main__":
             torch_dtype=torch_dtype,
         )
 
-    print(training_args.should_log)
     if training_args.should_log:
         print_trainable_params(model)
 
@@ -227,6 +226,8 @@ if __name__ == "__main__":
         logger.info("*** Predict ***")
         gen_config = {
                 "do_sample": False,
+                "temperature": 0,
+                "top_p": 1,
                 "max_new_tokens": 256,
                 "pad_token_id": llm_tokenizer.eos_token_id,
             }

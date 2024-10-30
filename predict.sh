@@ -34,9 +34,9 @@ gas=8
 # master_port=29500
 
 # ckpt_dir=outputs/data/hytrel/all-table-kg-schema-tasks-w_inverse_rel/hytrel-codellama/v2-10M_query_token_200k-only_query-not_freeze_gnn-trained_roberta_base-lora4_32_llama-10.cfg/checkpoint-11469
-ckpt_dir=outputs/data/hytrel/all-table-kg-schema-tasks-w_inverse_rel/hytrel-codellama/v2-lora4_32-llama-0.cfg/checkpoint-11469
+ckpt_dir=new-outputs-old/data/hytrel/all-table-kg-schema-tasks-10_tasks/hytrel-llama3/v2-lora4_32-llama-0.cfg/checkpoint-88176
 
-include=localhost:0,1,2,3
+include=localhost:0,1,2,3,4,5,6,7
 master_port=29501
 
 echo ${ckpt_dir}

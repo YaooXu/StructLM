@@ -222,7 +222,7 @@ if __name__ == "__main__":
     model_path = "sentence-transformers/all-roberta-large-v1"
     num_proc = 64
 
-    file_path = 'preprocess/table.pq'
+    file_path = 'preprocess/raw_data/dataset.pq'
     dataset = load_dataset("parquet", data_files=file_path)['train']
     dataset = dataset.select(range(10_000_000))
     processed_dataset1 = dataset.map(preprocess_table, batched=True, num_proc=num_proc, load_from_cache_file=False)

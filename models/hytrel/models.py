@@ -119,6 +119,10 @@ class Encoder(nn.Module):
     graph_attention_mask = torch.nn.utils.rnn.pad_sequence(list_graph_attn, batch_first=True).to(embedding_s.device)
     graph_embeds = torch.nn.utils.rnn.pad_sequence(list_graph_embeds, batch_first=True).to(embedding_s.device)
 
+    max_seq_len = 400
+    graph_attention_mask = torch.nn.functional.pad(graph_attention_mask, (0, max_seq_len - graph_attention_mask.size(1)))
+    graph_embeds = torch.nn.functional.pad(graph_embeds, (0, 0, 0, max_seq_len - graph_embeds.size(1)))
+    
     return graph_embeds, graph_attention_mask
 
 

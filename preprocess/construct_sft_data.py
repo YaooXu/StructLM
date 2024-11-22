@@ -21,6 +21,9 @@ from transformers import AutoTokenizer, AutoModel
 #         # new_kg_tuples.append([f'Node: {tup[2]}', f'Inverse Relation: {tup[1]}', f'Node: {tup[0]}'])
 #     return new_kg_tuples
 
+import nltk
+nltk.download('punkt_tab')
+
 tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf", device_map="auto")
 def truncate_to_max_tokens(text, max_tokens=2048):
     # 使用tokenizer进行token化，确保返回的tokens不会超过 max_tokens
@@ -154,17 +157,17 @@ def construct_processed_samples(tasks, prompts_dict, is_train, output_path):
         json.dump(processed_samples, f)
 
 output_dir = 'data/processed'
-# all_tasks = ["wikitq", "hybridqa", "fetaqa", "tabmwp", "wikisql", "tab_fact", "totto", "kvret", 'compwebq', 'dart']
-# construct_processed_samples(all_tasks, train_prompts_dict, True, f'{output_dir}/custom_skginstruct.json')
+all_tasks = ["wikitq", "hybridqa", "fetaqa", "tabmwp", "wikisql", "tab_fact", "totto", "kvret", 'compwebq', 'dart']
+construct_processed_samples(all_tasks, train_prompts_dict, True, f'{output_dir}/custom_skginstruct.json')
 
-# all_tasks += ['sqa', 'wikitabletext', 'finqa']
-# construct_processed_samples(all_tasks, test_prompts_dict, False, f'{output_dir}/custom_test_skginstruct.json')
+all_tasks += ['sqa', 'wikitabletext', 'finqa']
+construct_processed_samples(all_tasks, test_prompts_dict, False, f'{output_dir}/custom_test_skginstruct.json')
 
-# one_shot = True
-# construct_processed_samples(all_tasks, test_prompts_dict, False, 'data/processed/one_shot_test_skginstruct.json')
+one_shot = True
+construct_processed_samples(all_tasks, test_prompts_dict, False, 'data/processed/one_shot_test_skginstruct.json')
 
-one_shot = False
-all_tasks = ['sqa', 'wikitabletext', 'finqa'] + ["wikitq", "hybridqa", "fetaqa", "tabmwp", "wikisql", "tab_fact", "totto", "kvret", 'compwebq', 'dart']
+# one_shot = False
+# all_tasks = ['sqa', 'wikitabletext', 'finqa'] + ["wikitq", "hybridqa", "fetaqa", "tabmwp", "wikisql", "tab_fact", "totto", "kvret", 'compwebq', 'dart']
 
-# construct_processed_samples(all_tasks, test_prompts_dict, True, 'data/processed/statistic_train_skginstruct.json')
-construct_processed_samples(all_tasks, test_prompts_dict, False, 'data/processed/statistic_test_skginstruct.json')
+# # construct_processed_samples(all_tasks, test_prompts_dict, True, 'data/processed/statistic_train_skginstruct.json')
+# construct_processed_samples(all_tasks, test_prompts_dict, False, 'data/processed/statistic_test_skginstruct.json')

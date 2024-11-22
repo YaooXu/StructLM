@@ -53,6 +53,8 @@ class WarppedTrainingArguments(TrainingArguments):
     dataset_dir: str = field(default=None)
     max_desc_length: int = field(default=2048)
     max_seq_length: int = field(default=2560)
+    max_qformer_length: int = field(default=64)
+    
     preprocessing_num_workers: int = field(default=8)
     data_cache_dir: Optional[str] = field(default=None, metadata={"help": "The datasets processed stored"})
 
@@ -133,7 +135,7 @@ if __name__ == "__main__":
         hypergraph_enc_config.update({k:v for k,v in model_args.hytrel})
 
     if model_args.qformer.pretraining:
-        model = GFormer(model_args, hypergraph_enc_config)
+        model = GFormer(model_args, encoder_tokenizer, hypergraph_enc_config)
     else:
         model = LLaSA(
             model_args,
@@ -157,38 +159,45 @@ if __name__ == "__main__":
             encoder_tokenizer,
             max_seq_length=training_args.max_seq_length,
             max_desc_length=training_args.max_desc_length,
+            max_qformer_length=training_args.max_qformer_length,
             num_query_tokens=model_args.qformer.num_query_tokens,
             qformer_pretraining=model_args.qformer.pretraining
         )
-        eval_dataset = build_instruction_dataset(
-            dataset_dir / f"val.pq",
-            llm_tokenizer,
-            encoder_tokenizer,
-            max_seq_length=training_args.max_seq_length,
-            max_desc_length=training_args.max_desc_length,
-            num_query_tokens=model_args.qformer.num_query_tokens,
-            qformer_pretraining=model_args.qformer.pretraining
-        )
-        eval_dataset = eval_dataset.select(random.sample(range(len(eval_dataset)), k=min(1000, len(eval_dataset))))
+        
+        if not model_args.qformer.pretraining:
+            eval_dataset = build_instruction_dataset(
+                dataset_dir / f"val.pq",
+                llm_tokenizer,
+                encoder_tokenizer,
+                max_seq_length=training_args.max_seq_length,
+                max_desc_length=training_args.max_desc_length,
+                max_qformer_length=training_args.max_qformer_length,
+                num_query_tokens=model_args.qformer.num_query_tokens,
+                qformer_pretraining=model_args.qformer.pretraining
+            )
+            eval_dataset = eval_dataset.select(random.sample(range(len(eval_dataset)), k=min(1000, len(eval_dataset))))
 
-    if training_args.do_train or training_args.do_predict:
+    if training_args.do_predict:
         test_dataset = build_instruction_dataset(
             dataset_dir / f"test.pq",
             llm_tokenizer,
             encoder_tokenizer,
             max_seq_length=training_args.max_seq_length,
             max_desc_length=training_args.max_desc_length,
+            max_qformer_length=training_args.max_qformer_length,
             num_query_tokens=model_args.qformer.num_query_tokens,
             training=False,
             qformer_pretraining=model_args.qformer.pretraining
         )
         test_examples = load_jsonl(dataset_dir / f"ori_test.jsonl")
 
-    if "debug" in training_args.output_dir:
-        idxes = random.sample(range(len(test_dataset)), k=100)
-        test_dataset = test_dataset.select(idxes)
-        test_examples = [test_examples[i] for i in idxes]
-
+        if "debug" in training_args.output_dir:
+            idxes = random.sample(range(len(test_dataset)), k=100)
+            test_dataset = test_dataset.select(idxes)
+            test_examples = [test_examples[i] for i in idxes]
+    else:
+        test_dataset = test_examples = None
+        
     data_collator = DataCollatorForGraphSupervisedDataset(llm_tokenizer, encoder_tokenizer)
 
     trainer = StructQASeq2SeqTrainer(

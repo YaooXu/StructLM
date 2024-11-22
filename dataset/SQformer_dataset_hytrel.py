@@ -85,8 +85,9 @@ def build_instruction_dataset(
     encoder_tokenizer: transformers.PreTrainedTokenizer,
     max_seq_length: int = 2560,
     max_desc_length: int = 2048,
+    max_qformer_length= 64,
     data_cache_dir=None,
-    preprocessing_num_workers=32,
+    preprocessing_num_workers=64,
     num_query_tokens=10,
     training=True,
     qformer_pretraining=False,
@@ -105,7 +106,7 @@ def build_instruction_dataset(
         preprocessing_num_workers (int, optional): _description_. Defaults to 10.
     """
 
-    return GraphDataset(data_path, llm_tokenizer, encoder_tokenizer, num_query_tokens, max_seq_length, training, qformer_pretraining)
+    return GraphDataset(data_path, llm_tokenizer, encoder_tokenizer, num_query_tokens, max_seq_length, max_qformer_length, training, qformer_pretraining)
 
     assert max_seq_length > max_desc_length
 
@@ -234,12 +235,13 @@ def build_instruction_dataset(
 
 
 class GraphDataset(Dataset):
-    def __init__(self, data_path, llm_tokenizer, encoder_tokenizer, num_query_tokens=10, max_seq_length=2560, training=True, qformer_pretraining=True) -> None:
+    def __init__(self, data_path, llm_tokenizer, encoder_tokenizer, num_query_tokens=10, max_seq_length=2560, max_qformer_length=64, training=True, qformer_pretraining=True) -> None:
         self.raw_dataset = load_dataset("parquet", data_files=str(data_path), cache_dir='./data/.cache')['train']
         self.llm_tokenizer = llm_tokenizer
         self.encoder_tokenizer = encoder_tokenizer
         self.num_query_tokens = num_query_tokens
         self.max_seq_length = max_seq_length
+        self.max_qformer_length = max_qformer_length
         self.training = training
 
         self.sqformer_pretraining = qformer_pretraining
@@ -288,18 +290,27 @@ class GraphDataset(Dataset):
         # qformer input and target (for pretraining)
         tokenized_input = self.encoder_tokenizer(question, return_attention_mask=False, add_special_tokens=False)
         tokenized_target = self.encoder_tokenizer(label, return_attention_mask=False, add_special_tokens=False)
-        s = [self.encoder_tokenizer.bos_token_id] + tokenized_input["input_ids"]
-        t = tokenized_target["input_ids"] + [self.encoder_tokenizer.eos_token_id]
-        if self.sqformer_pretraining:
-            qformer_input_ids = torch.LongTensor(s + t)[:512]
-            qformer_labels = torch.LongTensor([IGNORE_INDEX] * len(s) + t)[:512]
-        else:
-            qformer_input_ids = torch.LongTensor(s)[:512]
-            qformer_labels = torch.LongTensor([IGNORE_INDEX] * len(s) + t)[:512]
+        
+        s = [self.encoder_tokenizer.dec_token_id] + tokenized_input["input_ids"]
+        t = [self.encoder_tokenizer.gen_token_id] + tokenized_target["input_ids"] + [self.encoder_tokenizer.eos_token_id]
+
+        qformer_input_ids = torch.LongTensor(s)[:self.max_qformer_length]
+        qformer_labels = torch.LongTensor(t)[:self.max_qformer_length]
+        
+        qformer_input_ids = F.pad(
+            qformer_input_ids, (0, self.max_qformer_length - qformer_input_ids.size(0)), value=self.encoder_tokenizer.pad_token_id
+        )
+        qformer_output_ids = F.pad(
+            qformer_labels, (0, self.max_qformer_length - qformer_labels.size(0)), value=self.encoder_tokenizer.pad_token_id
+        )
+        qformer_labels = F.pad(
+            qformer_labels, (0, self.max_qformer_length - qformer_labels.size(0)), value=IGNORE_INDEX
+        )        
         
         qformer_input = {
             'graph': graph,
             "input_ids": qformer_input_ids,
+            "output_ids": qformer_output_ids,
             "labels": qformer_labels,
         }
         item = {
@@ -380,11 +391,15 @@ class DataCollatorForGraphSupervisedDataset(object):
         qformer_input_ids = [instance['qformer_input']["input_ids"] for instance in instances]
         qformer_input_ids = self.encoder_tokenizer.pad({"input_ids": qformer_input_ids})["input_ids"]
 
+        qformer_output_ids = [instance['qformer_input']["output_ids"] for instance in instances]
+        qformer_output_ids = self.encoder_tokenizer.pad({"input_ids": qformer_input_ids})["input_ids"]
+
         qformer_labels = [instance['qformer_input']["labels"] for instance in instances]
         qformer_labels = self._pad_labels(qformer_labels, self.encoder_tokenizer.padding_side)
 
         qformer_inputs = {
             "input_ids": qformer_input_ids,
+            "output_ids": qformer_output_ids,
             "labels": qformer_labels,
             "attention_mask": qformer_input_ids.ne(self.encoder_tokenizer.pad_token_id),
             "graphs": graphs,

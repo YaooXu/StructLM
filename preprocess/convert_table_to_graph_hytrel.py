@@ -1,10 +1,11 @@
+import sys
+sys.path.append('./')
+
 from copy import deepcopy
 import random
-import sys
 import time
 import zipfile
 import sys
-sys.path.append('./')
 
 import numpy as np
 
@@ -24,11 +25,11 @@ from collections import defaultdict, deque
 from transformers import AutoTokenizer, AutoModel
 from multiprocessing import Pool
 from datasets import load_dataset, Dataset, DownloadMode
-from torch.multiprocessing import Pool, Process, set_start_method
 import torch.nn.functional as F
 
 from dataset.data import TableConverter, GraphConverter
 from utils.sentence_transformer import get_sentence_embeds
+from multiprocessing import Pool
 
 # constants
 CAP_TAG = "<caption>"
@@ -40,6 +41,7 @@ MISSING_CELL_TAG = "[CELL]"
 MISSING_HEADER_TAG = "[HEAD]"
 
 import multiprocessing
+
 # 创建一个锁字典来存储不同 zip 文件路径对应的锁
 lock_dict = defaultdict(multiprocessing.Lock)
 
@@ -51,7 +53,7 @@ def convert_kg_tups_bidir(kg_tuples):
     return new_kg_tuples
 
 
-def obtain_samples(process_idx, idxes_to_process, cache_dir):
+def obtain_samples(process_idx, samples, cache_dir, cache_graphs, model_path, tokenizer):
     def get_zip_file_and_name(sample):
         zip_file_path = f"{cache_dir}/{sample['task']}/{sample['task_id'] // 2000}.zip"
         graph_name = f"graph_{sample['task_id']}.pkl"
@@ -60,20 +62,18 @@ def obtain_samples(process_idx, idxes_to_process, cache_dir):
     if cache_graphs:
         llm = AutoModel.from_pretrained(
             model_path,
-            device_map=f"cuda:{process_idx}",
-        )
+        ).to(f"cuda:{process_idx}")
         llm.eval()
+        
+    table_converter, graph_converter = TableConverter(tokenizer), GraphConverter(tokenizer)
 
     new_samples = []
-    tasks_to_n = defaultdict(int)
     t1 = time.time()
-    for n, idx in enumerate(idxes_to_process):
+    for n, sample in enumerate(samples):
         if (n + 1) % 500 == 0:
             t2 = time.time()
-            print(f"{process_idx}: {n / len(idxes_to_process)}, {t2 - t1}")
+            print(f"{process_idx}: {n / len(samples)}, {t2 - t1}")
             t1 = t2
-
-        sample = all_samples[idx]
 
         try:
             if sample['key'] == 'table':
@@ -130,42 +130,37 @@ def obtain_samples(process_idx, idxes_to_process, cache_dir):
     return new_samples
 
 if __name__ == "__main__":
-
-    n_process = 64 # num GPU if cache
+    from torch.multiprocessing import set_start_method
+    set_start_method("spawn", force=True)
+    
+    n_process = torch.cuda.device_count() # num GPU if cache
     shuffle = False
     model_path = "sentence-transformers/all-roberta-large-v1"
-
+    
     # pretraining = True
     # output_dir = f"./data/hytrel/llm_based_gnn_pretraining"
     
     pretraining = False
-    output_dir = f"./data/hytrel/statistics"
+    output_dir = f"data/all-table-kg-schema-tasks"
     os.makedirs(output_dir, exist_ok=True)
 
-    cache_graphs = False
-    cache_dir = f"data/hytrel/all-table-kg-schema-tasks"
+    cache_graphs = True
+    cache_dir = f"data/all-table-kg-schema-tasks"
 
     tokenizer = AutoTokenizer.from_pretrained(model_path, device_map="auto")
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    table_converter, graph_converter = TableConverter(tokenizer), GraphConverter(tokenizer)
-
     for path in (
         # 'data/processed/llm_based_gnn_pretraining.pq',
-        # 'data/processed/statistic_train_skginstruct.json',
-        'data/processed/statistic_test_skginstruct.json',
-        # "data/processed/custom_skginstruct.json",
-        # "data/processed/custom_test_skginstruct.json",
+        "data/processed/custom_skginstruct.json",
+        "data/processed/custom_test_skginstruct.json",
     ):
         all_samples = load_json(path=path) if path.endswith('json') else load_dataset("parquet", data_files=path, cache_dir='./data/.cache')['train']
         num_samples = len(all_samples)
         print(num_samples)
 
-        if 'test' in path:
-            cur_cache_dir = os.path.join(cache_dir, 'test')
-        else:
-            cur_cache_dir = os.path.join(cache_dir, 'train')
+        cur_cache_dir = os.path.join(cache_dir, "test" if "test" in path else "train")
         os.makedirs(cur_cache_dir, exist_ok=True)
 
         with Pool(processes=n_process) as pool:
@@ -175,7 +170,7 @@ if __name__ == "__main__":
             for i in range(n_process):
                 ed = st + num_samples_in_chunk
                 ed = min(ed, num_samples)
-                jobs.append([i, list(range(st, ed)), cur_cache_dir])
+                jobs.append([i, all_samples[st:ed], cur_cache_dir, cache_graphs, model_path, tokenizer])
                 st = ed
 
             results = pool.starmap(obtain_samples, jobs)

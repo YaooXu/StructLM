@@ -10,6 +10,7 @@ from utils.tool import get_constructor
 from utils.configure import Configure
 
 from transformers import AutoTokenizer, AutoModel
+
 # from dataset.data import TableConverter, GraphConverter
 # model_path = "sentence-transformers/all-roberta-large-v1"
 # tokenizer = AutoTokenizer.from_pretrained(model_path, device_map="auto")
@@ -21,8 +22,8 @@ from transformers import AutoTokenizer, AutoModel
 #         # new_kg_tuples.append([f'Node: {tup[2]}', f'Inverse Relation: {tup[1]}', f'Node: {tup[0]}'])
 #     return new_kg_tuples
 
-import nltk
-nltk.download('punkt_tab')
+# import nltk
+# nltk.download('punkt_tab')
 
 tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf", device_map="auto")
 def truncate_to_max_tokens(text, max_tokens=2048):
@@ -52,12 +53,7 @@ table_tasks = ["wikitq", "hybridqa", "fetaqa", "tabmwp", "wikisql", "tab_fact", 
 schema_tasks = ["spider", "sparc"]
 kg_tasks = ['compwebq', 'dart']
 
-with open('data/processed/1-shot_examples.jsonl', 'r', encoding='utf-8') as f:
-    lines = f.readlines()
-    examples = [json.loads(line) for line in lines]
-    examples = {list(e.keys())[0]: list(e.values())[0] for e in examples}
-
-def construct_processed_samples(tasks, prompts_dict, is_train, output_path):
+def construct_processed_samples(tasks, prompts_dict, is_train, output_path, one_shot=False):
     processed_samples = []
     for task_name in tasks:
         # error_cnt = 0
@@ -156,15 +152,19 @@ def construct_processed_samples(tasks, prompts_dict, is_train, output_path):
     with open(output_path, 'w') as f:
         json.dump(processed_samples, f)
 
+with open('data/processed/1-shot_examples.jsonl', 'r', encoding='utf-8') as f:
+    lines = f.readlines()
+    examples = [json.loads(line) for line in lines]
+    examples = {list(e.keys())[0]: list(e.values())[0] for e in examples}
+# construct_processed_samples(all_tasks, test_prompts_dict, False, 'data/processed/one_shot_test_skginstruct.json')
+
 output_dir = 'data/processed'
 all_tasks = ["wikitq", "hybridqa", "fetaqa", "tabmwp", "wikisql", "tab_fact", "totto", "kvret", 'compwebq', 'dart']
-construct_processed_samples(all_tasks, train_prompts_dict, True, f'{output_dir}/custom_skginstruct.json')
+# construct_processed_samples(all_tasks, train_prompts_dict, True, f'{output_dir}/custom_skginstruct.json')
 
 all_tasks += ['sqa', 'wikitabletext', 'finqa']
 construct_processed_samples(all_tasks, test_prompts_dict, False, f'{output_dir}/custom_test_skginstruct.json')
 
-one_shot = True
-construct_processed_samples(all_tasks, test_prompts_dict, False, 'data/processed/one_shot_test_skginstruct.json')
 
 # one_shot = False
 # all_tasks = ['sqa', 'wikitabletext', 'finqa'] + ["wikitq", "hybridqa", "fetaqa", "tabmwp", "wikisql", "tab_fact", "totto", "kvret", 'compwebq', 'dart']

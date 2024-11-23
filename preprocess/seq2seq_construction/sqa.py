@@ -83,6 +83,7 @@ class TrainDataset(Dataset):
                     extended_data.update({"struct_in": linear_table.lower(),
                                           "text_in": question_and_history_str.lower(),
                                           "seq_out": seq_out.lower(),
+                                          "question": raw_data['question'].lower(),
                                           "table": table_content})
                     self.extended_data.append(extended_data)
                 except:
@@ -131,6 +132,7 @@ class DevDataset(Dataset):
                     extended_data.update({"struct_in": linear_table.lower(),
                                           "text_in": question_and_history_str.lower(),
                                           "seq_out": seq_out.lower(),
+                                          "question": raw_data['question'].lower(),
                                           "table": table_content})
                     self.extended_data.append(extended_data)
                 except:
@@ -179,6 +181,7 @@ class TestDataset(Dataset):
                     extended_data.update({"struct_in": linear_table.lower(),
                                           "text_in": question_and_history_str.lower(),
                                           "seq_out": seq_out.lower(),
+                                          "question": raw_data['question'].lower(),
                                           "table": table_content})
                     self.extended_data.append(extended_data)
                 except:

@@ -337,41 +337,43 @@ class LLaSA(nn.Module):
         self.args = args
         self.num_query_tokens = args.qformer.num_query_tokens
 
-        # llm
-        self.llm: AutoModelForCausalLM = AutoModelForCausalLM.from_pretrained(
-            args.llm.model_name_or_path, 
-            attn_implementation=args.llm.attn_implementation, 
-            **kwargs
-        )
-        self.init_tokenizer_and_embeds(llm_tokenizer, encoder_tokenizer, DEFAULT_GRAPH_PAD_TOKEN)
+        if not self.args.llm.skip_llm:
+            self.llm: AutoModelForCausalLM = AutoModelForCausalLM.from_pretrained(
+                args.llm.model_name_or_path, 
+                attn_implementation=args.llm.attn_implementation, 
+                **kwargs
+            )
+            self.init_tokenizer_and_embeds(llm_tokenizer, encoder_tokenizer, DEFAULT_GRAPH_PAD_TOKEN)
 
-        if args.llm.finetuning_type == "full":
-            self.llm.requires_grad_(True)
-        elif args.llm.finetuning_type == "lora":
-            if args.llm.ckpt_path is not None:
-                logger.info(f"loading lora ckpt from {args.llm.ckpt_path}")
-                self.llm.load_adapter(args.llm.ckpt_path)
+            if args.llm.finetuning_type == "full":
+                self.llm.requires_grad_(True)
+            elif args.llm.finetuning_type == "lora":
+                if args.llm.ckpt_path is not None:
+                    logger.info(f"loading lora ckpt from {args.llm.ckpt_path}")
+                    self.llm.load_adapter(args.llm.ckpt_path)
+                else:
+                    logger.info("adding lora model")
+                    peft_config = LoraConfig(
+                        task_type=TaskType.CAUSAL_LM,
+                        inference_mode=False,
+                        target_modules=args.llm.target_modules.split(","),
+                        r=args.llm.r,
+                        lora_alpha=args.llm.lora_alpha,
+                        lora_dropout=args.llm.lora_dropout,
+                    )
+                    self.llm = get_peft_model(self.llm, peft_config)
+                    self.llm.print_trainable_parameters()
+            # elif args.llm.finetuning_type == 'pt':
+            #     self.llm.requires_grad_(False)
+
+            #     self.query_token_embeds = nn.Parameter(torch.zeros(args.qformer.num_query_tokens, self.llm.config.hidden_size))
+            #     self.query_token_embeds.data.normal_(mean=0.0, std=self.llm.config.initializer_range)
+            elif args.llm.finetuning_type == "freeze":
+                self.llm.requires_grad_(False)
             else:
-                logger.info("adding lora model")
-                peft_config = LoraConfig(
-                    task_type=TaskType.CAUSAL_LM,
-                    inference_mode=False,
-                    target_modules=args.llm.target_modules.split(","),
-                    r=args.llm.r,
-                    lora_alpha=args.llm.lora_alpha,
-                    lora_dropout=args.llm.lora_dropout,
-                )
-                self.llm = get_peft_model(self.llm, peft_config)
-                self.llm.print_trainable_parameters()
-        # elif args.llm.finetuning_type == 'pt':
-        #     self.llm.requires_grad_(False)
-
-        #     self.query_token_embeds = nn.Parameter(torch.zeros(args.qformer.num_query_tokens, self.llm.config.hidden_size))
-        #     self.query_token_embeds.data.normal_(mean=0.0, std=self.llm.config.initializer_range)
-        elif args.llm.finetuning_type == "freeze":
-            self.llm.requires_grad_(False)
+                raise NotImplementedError
         else:
-            raise NotImplementedError
+            self.llm = None
 
         # qformer
         if self.num_query_tokens > 0:

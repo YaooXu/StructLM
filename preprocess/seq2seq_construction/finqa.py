@@ -77,6 +77,7 @@ class TrainDataset(Dataset):
                                         # "struct_in": ''.join(extend_data['pre_text']) + '\n' + linear_table.lower() + '\n' + ''.join(extend_data['post_text']),
                                         "text_in": question.lower(),
                                         "seq_out": seq_out.lower(),
+                                        "question": question.lower(),
                                         "table": table})
                     self.extended_data.append(extend_data)
             if args.dataset.use_cache:
@@ -126,6 +127,7 @@ class DevDataset(Dataset):
                                     # "struct_in": ''.join(extend_data['pre_text']) + '\n' + linear_table.lower() + '\n' + ''.join(extend_data['post_text']),
                                     "text_in": question.lower(),
                                     "seq_out": seq_out.lower(),
+                                    "question": question.lower(),
                                     "table": table})
                 self.extended_data.append(extend_data)
             if args.dataset.use_cache:
@@ -175,6 +177,7 @@ class TestDataset(Dataset):
                                     # "struct_in": ''.join(extend_data['pre_text']) + '\n' + linear_table.lower() + '\n' + ''.join(extend_data['post_text']),
                                     "text_in": question.lower(),
                                     "seq_out": seq_out.lower(),
+                                    "question": question.lower(),
                                     "table": table})
                 self.extended_data.append(extend_data)
             if args.dataset.use_cache:

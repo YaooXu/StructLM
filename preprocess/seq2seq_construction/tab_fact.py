@@ -82,6 +82,7 @@ class TrainDataset(Dataset):
 
                     extend_data.update({"struct_in": linear_table.lower(),
                                         "text_in": statement.lower(),
+                                        "question": statement.lower(),
                                         "seq_out": label_str.lower()})
                     self.extended_data.append(extend_data)
             if args.dataset.use_cache:
@@ -126,6 +127,7 @@ class DevDataset(Dataset):
 
                 extend_data.update({"struct_in": linear_table.lower(),
                                     "text_in": statement.lower(),
+                                    "question": statement.lower(),
                                     "seq_out": label_str.lower()})
                 self.extended_data.append(extend_data)
             if args.dataset.use_cache:
@@ -169,6 +171,7 @@ class TestDataset(Dataset):
 
                 extend_data.update({"struct_in": linear_table.lower(),
                                     "text_in": statement.lower(),
+                                    "question": statement.lower(),
                                     "seq_out": label_str.lower()})
                 self.extended_data.append(extend_data)
             if args.dataset.use_cache:

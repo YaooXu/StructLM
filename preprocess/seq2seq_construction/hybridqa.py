@@ -70,6 +70,7 @@ class TrainDataset(Dataset):
 
                     extend_data.update({"struct_in": table_passage_context.lower(),
                                         "text_in": question.lower(),
+                                        "question": question.lower(),
                                         "seq_out": gold_result.lower()})
                     self.extended_data.append(extend_data)
             if args.dataset.use_cache:
@@ -113,6 +114,7 @@ class DevDataset(Dataset):
 
                     extend_data.update({"struct_in": table_passage_context.lower(),
                                         "text_in": question.lower(),
+                                        "question": question.lower(),
                                         "seq_out": gold_result.lower()})
                     self.extended_data.append(extend_data)
             if args.dataset.use_cache:

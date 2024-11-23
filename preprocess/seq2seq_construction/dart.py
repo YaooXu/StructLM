@@ -78,7 +78,9 @@ class TrainDataset(Dataset):
         raw_data.update({"struct_in": self.full_src_lst[index],
                          "text_in": "",
                          "seq_out": self.full_tgt_lst[index],
-                         "kg_tuples": raw_data['tripleset']})
+                         "question": "what do the triples describe?",
+                         "kg_tuples": raw_data['tripleset']
+                         })
         return raw_data
 
     def __len__(self):
@@ -125,6 +127,7 @@ class DevDataset(Dataset):
         raw_data.update({"struct_in": self.full_src_lst[index],
                          "text_in": "",
                          "seq_out": self.full_tgt_lst[index],
+                         "question": "what do the triples describe?",
                          "references": self.full_ref_lst[index],
                          "kg_tuples": raw_data['tripleset']})
         return raw_data
@@ -172,6 +175,7 @@ class TestDataset(Dataset):
         raw_data.update({"struct_in": self.full_src_lst[index],
                          "text_in": "",
                          "seq_out": self.full_tgt_lst[index],
+                         "question": "what do the triples describe?",
                          "references": self.full_ref_lst[index],
                          "kg_tuples": raw_data['tripleset']})
         return raw_data

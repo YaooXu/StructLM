@@ -104,6 +104,7 @@ class TrainDataset(Dataset):
                         extend_data.update({"struct_in": linear_table.lower(),
                                             "text_in": history.lower(),
                                             "seq_out": gold_response.lower(),
+                                            "question": "what does the table describe?",
                                             "table": table_context})
                         self.extended_data.append(extend_data)
             print(len(self.extended_data))
@@ -156,6 +157,7 @@ class DevDataset(Dataset):
                         extend_data.update({"struct_in": linear_table.lower(),
                                             "text_in": history.lower(),
                                             "seq_out": gold_response.lower(),
+                                            "question": "what does the table describe?",
                                             "table": table_context})
                         self.extended_data.append(extend_data)
 
@@ -207,6 +209,7 @@ class TestDataset(Dataset):
                         extend_data.update({"struct_in": linear_table.lower(),
                                             "text_in": history.lower(),
                                             "seq_out": gold_response.lower(),
+                                            "question": "what does the table describe?",
                                             "table": table_context})
                         self.extended_data.append(extend_data)
 

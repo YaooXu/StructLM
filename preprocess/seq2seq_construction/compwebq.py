@@ -59,7 +59,12 @@ class TrainDataset(Dataset):
                 # seq_out = extend_data["sparql"]
                 seq_out = ', '.join(answers)
 
-                extend_data.update({"struct_in": serialized_kg, "text_in": question, "seq_out": seq_out})
+                extend_data.update({
+                    "struct_in": serialized_kg, 
+                    "text_in": question, 
+                    "question": question.lower(),
+                    "seq_out": seq_out
+                })
                 self.data.append(extend_data)
             if args.dataset.use_cache:
                 torch.save(self.data, cache_path)
@@ -90,7 +95,12 @@ class DevDataset(Dataset):
                 # seq_out = extend_data["sparql"]
                 seq_out = ', '.join(answers)
 
-                extend_data.update({"struct_in": serialized_kg, "text_in": question, "seq_out": seq_out})
+                extend_data.update({
+                    "struct_in": serialized_kg, 
+                    "text_in": question, 
+                    "question": question.lower(),
+                    "seq_out": seq_out
+                })
                 self.data.append(extend_data)
             if args.dataset.use_cache:
                 torch.save(self.data, cache_path)
@@ -121,7 +131,11 @@ class TestDataset(Dataset):
                 # seq_out = extend_data["sparql"]
                 seq_out = ', '.join(answers)
 
-                extend_data.update({"struct_in": serialized_kg, "text_in": question, "seq_out": seq_out})
+                extend_data.update({
+                    "struct_in": serialized_kg, 
+                    "text_in": question, 
+                    "question": question.lower(),
+                    "seq_out": seq_out})
                 self.data.append(extend_data)
             if args.dataset.use_cache:
                 torch.save(self.data, cache_path)

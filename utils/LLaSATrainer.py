@@ -398,7 +398,7 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
         os.makedirs(output_dir, exist_ok=True)
         logger.info(f"Saving model checkpoint to {output_dir}")
 
-        if self.model.args.llm.finetuning_type != 'freeze':
+        if not self.model.args.llm.skip_llm and self.model.args.llm.finetuning_type != 'freeze':
             supported_classes = (PreTrainedModel,) if not is_peft_available() else (
                 PreTrainedModel, PeftModel)
             # Save a trained model and configuration using `save_pretrained()`.

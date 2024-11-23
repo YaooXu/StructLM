@@ -203,6 +203,7 @@ class TrainDataset(Dataset):
                 extend_data.update({"struct_in": linear_table,
                                     "text_in": "",
                                     "seq_out": seq_out,
+                                    "question": "what does the table describe?",
                                     "table": new_table})
                 self.data.append(extend_data)
             if args.dataset.use_cache:
@@ -251,6 +252,7 @@ class DevDataset(Dataset):
                 extend_data.update({"struct_in": linear_table,
                                     "text_in": "",
                                     "seq_out": seq_out,
+                                    "question": "what does the table describe?",
                                     "table": new_table})
                 self.data.append(extend_data)
             if args.dataset.use_cache:

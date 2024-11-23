@@ -157,7 +157,7 @@ class GFormer(nn.Module):
 
         return query_embeds
 
-    def gen_query_embeds_v2(self, qformer_inputs, llm, llm_graph_pad_token_id):
+    def gen_query_embeds_v3(self, qformer_inputs, llm, llm_graph_pad_token_id):
         input_ids = qformer_inputs["input_ids"]
         question_attention_mask = qformer_inputs["attention_mask"]
         batch_size = input_ids.shape[0]
@@ -168,8 +168,12 @@ class GFormer(nn.Module):
             if self.args.qformer.without_gnn:
                 graph_embeds, graph_attention_mask = None, None
             else:
-                graph_embeds, graph_attention_mask = self.graph_encoder(qformer_inputs["graphs"])
-
+                if self.args.qformer.only_gnn:
+                    list_graph_embeds = self.graph_encoder(qformer_inputs["graphs"], return_list_graph_embeds=True)
+                    return list_graph_embeds
+                else:
+                    graph_embeds, graph_attention_mask = self.graph_encoder(qformer_inputs["graphs"])
+            
             query_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
             query_atts = torch.ones(query_embeds.shape[:-1]).to(query_embeds.device)
             
@@ -199,8 +203,8 @@ class GFormer(nn.Module):
         return query_embeds
 
     def gen_query_embeds(self, qformer_inputs, llm, llm_graph_pad_token_id):
-        if self.strategy[:2] == "v2":
-            query_embeds = self.gen_query_embeds_v2(qformer_inputs, llm, llm_graph_pad_token_id)
+        if self.strategy[:2] == "v3":
+            query_embeds = self.gen_query_embeds_v3(qformer_inputs, llm, llm_graph_pad_token_id)
         elif self.strategy[:2] == "pt":
             query_embeds = self.gen_query_embeds_pt(qformer_inputs, llm, llm_graph_pad_token_id)
         else:
@@ -364,7 +368,7 @@ class LLaSA(nn.Module):
             )
             self.init_tokenizer_and_embeds(llm_tokenizer, encoder_tokenizer, DEFAULT_GRAPH_PAD_TOKEN)
 
-            self.projector = nn.Linear(self.qformer.roberta_config.hidden_size, self.llm.config.hidden_size, dtype=kwargs["torch_dtype"])
+            self.projector = nn.Linear(hypergraph_enc_config.hidden_size, self.llm.config.hidden_size, dtype=kwargs["torch_dtype"])
             self.ln_norm = nn.LayerNorm(self.llm.config.hidden_size, dtype=kwargs["torch_dtype"])
 
             if args.llm.finetuning_type == "full":
@@ -440,19 +444,24 @@ class LLaSA(nn.Module):
         inputs_embeds = self.llm.get_input_embeddings()(input_ids)
         batch_size = inputs_embeds.shape[0]
 
-        query_embeds = self.qformer.gen_query_embeds(qformer_inputs, self.llm, self.llm_graph_pad_token_id).to(inputs_embeds.dtype)
+        query_embeds = self.qformer.gen_query_embeds(qformer_inputs, self.llm, self.llm_graph_pad_token_id)
 
-        if query_embeds.shape[-1] != inputs_embeds.shape[-1]:
-            # for v2
-            res_embeds = self.projector(query_embeds)
-            res_embeds = self.ln_norm(res_embeds)
+        if type(query_embeds) is list:
+            res_embeds = [self.ln_norm(self.projector(query_embed.to(inputs_embeds.dtype))) for query_embed in query_embeds]
         else:
-            # prompt tunning
-            res_embeds = query_embeds
+            query_embeds = query_embeds.to(inputs_embeds.dtype)
+            if query_embeds.shape[-1] != inputs_embeds.shape[-1]:
+                res_embeds = self.projector(query_embeds)
+                res_embeds = self.ln_norm(res_embeds)
+            else:
+                # prompt tunning
+                res_embeds = query_embeds
 
         graph_pad_st_idx = torch.argmax((input_ids == self.llm_graph_pad_token_id).int(), dim=1)
-        graph_pad_ed_idx = graph_pad_st_idx + self.num_query_tokens
-
+        graph_pad_ed_idx =  (
+            input_ids.size(1) - torch.argmax((input_ids == self.llm_graph_pad_token_id).flip(dims=[1]).int(), dim=1)
+        )
+        
         new_inputs_embeds = torch.zeros_like(inputs_embeds, dtype=inputs_embeds.dtype, device=inputs_embeds.device)
         for i in range(batch_size):
             cur_inputs_embeds = inputs_embeds[i]

@@ -184,7 +184,7 @@ if __name__ == "__main__":
         if "test" in path:
             df = pd.DataFrame(all_samples)
 
-            remain_keys = ["label", "input", "graph_path", "task", "num_nodes"]
+            remain_keys = ["label", "input", "question", "graph_path", "task", "num_nodes"]
             sub_df = df[remain_keys]
 
             dataset = Dataset.from_pandas(sub_df)

@@ -81,7 +81,7 @@ class Encoder(nn.Module):
     self.embed_layer = Embedding(config)
     self.layer = nn.ModuleList([EncoderLayer(config) for _ in range(config.num_hidden_layers)])
 
-  def forward(self, data):
+  def forward(self, data, return_list_graph_embeds=False):
     embedding_s, embedding_t = self.embed_layer(data.x_s, data.x_t)
     embedding_t = torch.cat([embedding_t, embedding_s], dim=0)
 
@@ -115,7 +115,10 @@ class Encoder(nn.Module):
         graph_embeds = embedding_s[x_s_idxes[i] : x_s_idxes[i + 1], :]  # s_nodes
         list_graph_attn.append(torch.LongTensor([1] * (x_s_idxes[i + 1] - x_s_idxes[i])))
         list_graph_embeds.append(graph_embeds)
-        
+    
+    if return_list_graph_embeds:
+      return list_graph_embeds
+    
     graph_attention_mask = torch.nn.utils.rnn.pad_sequence(list_graph_attn, batch_first=True).to(embedding_s.device)
     graph_embeds = torch.nn.utils.rnn.pad_sequence(list_graph_embeds, batch_first=True).to(embedding_s.device)
 

@@ -109,6 +109,7 @@ def construct_processed_samples(tasks, prompts_dict, is_train, output_path, one_
                 task_sample = {
                     'idx': len(processed_samples),
                     'input': final_input,
+                    'question': sample['question'],
                     'label': label,
                     key: struct_data,
                     'key': key,

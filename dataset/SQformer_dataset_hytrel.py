@@ -258,7 +258,6 @@ class GraphDataset(Dataset):
 
             graph = sample['graph']
         else:
-            # not used
             question = ''
 
             if type(sample['input']) is list:
@@ -321,8 +320,16 @@ class GraphDataset(Dataset):
 
         assert '[GRAPH_PAD]' in input_
         if self.num_query_tokens > 0:
-            input_ = input_.replace('[GRAPH_PAD]', \
-                f'\n\nstruct data representation tokens: {DEFAULT_GRAPH_PAD_TOKEN * self.num_query_tokens}\n\n\n')
+            if self.num_query_tokens == 400:
+                # llaga mode
+                input_ = input_.replace('[GRAPH_PAD]', \
+                    f"\n\nstruct data representation tokens: "
+                    f"{DEFAULT_GRAPH_PAD_TOKEN * graph['num_nodes']}"
+                    f"\n\n\n"
+                )               
+            else:
+                input_ = input_.replace('[GRAPH_PAD]', \
+                    f'\n\nstruct data representation tokens: {DEFAULT_GRAPH_PAD_TOKEN * self.num_query_tokens}\n\n\n')
         else:
             input_ = input_.replace('[GRAPH_PAD]', '\n\n\n')
                 

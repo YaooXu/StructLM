@@ -16,15 +16,9 @@ from transformers import (
 )
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 
-# from models.base_models.modeling_llama import LlamaForCausalLM
-# from models.base_models.modeling_t5_qformer import T5ForConditionalGeneration
-from models.graphormer.graphormer import Graphormer
-
 from models.hytrel import HyperGraphEncoder
 from utils.configure import Configure
 from utils.dist import all_gather_with_grad, concat_all_gather
-
-# from model.encoder_geo import GraphEncoder
 
 from .Qformer_bert import BertConfig, BertLMHeadModel, BertModel
 
@@ -337,13 +331,41 @@ class LLaSA(nn.Module):
         self.args = args
         self.num_query_tokens = args.qformer.num_query_tokens
 
-        if not self.args.llm.skip_llm:
+        # qformer
+        if self.num_query_tokens > 0:
+
+            qformer_kwargs = {}
+            if self.args.qformer.strategy == 'pt':
+                llm_config = AutoConfig.from_pretrained(args.llm.model_name_or_path)
+                qformer_kwargs['llm_hidden_size'] = llm_config.hidden_size
+                qformer_kwargs['llm_initializer_range'] = llm_config.initializer_range
+                
+            self.qformer = GFormer(args, encoder_tokenizer, hypergraph_enc_config, **qformer_kwargs)
+
+            if args.qformer.ckpt_path is not None and not args.qformer.skip_graph_encoder:
+                logger.info(f"loading qformer ckpt from {args.qformer.ckpt_path}")
+
+                state_dict = torch.load(args.qformer.ckpt_path)
+                self.qformer.load_state_dict(
+                    state_dict,
+                    # strict=False
+                )
+
+            self.qformer = self.qformer.to(kwargs["torch_dtype"])
+        else:
+            self.qformer = None
+
+        # llm
+        if not self.args.qformer.pretraining:
             self.llm: AutoModelForCausalLM = AutoModelForCausalLM.from_pretrained(
                 args.llm.model_name_or_path, 
                 attn_implementation=args.llm.attn_implementation, 
                 **kwargs
             )
             self.init_tokenizer_and_embeds(llm_tokenizer, encoder_tokenizer, DEFAULT_GRAPH_PAD_TOKEN)
+
+            self.projector = nn.Linear(self.qformer.roberta_config.hidden_size, self.llm.config.hidden_size, dtype=kwargs["torch_dtype"])
+            self.ln_norm = nn.LayerNorm(self.llm.config.hidden_size, dtype=kwargs["torch_dtype"])
 
             if args.llm.finetuning_type == "full":
                 self.llm.requires_grad_(True)
@@ -374,32 +396,7 @@ class LLaSA(nn.Module):
                 raise NotImplementedError
         else:
             self.llm = None
-
-        # qformer
-        if self.num_query_tokens > 0:
-
-            qformer_kwargs = {}
-            if self.args.qformer.strategy == 'pt':
-                qformer_kwargs['llm_hidden_size'] = self.llm.config.hidden_size
-                qformer_kwargs['llm_initializer_range'] = self.llm.config.initializer_range
-            self.qformer = GFormer(args, encoder_tokenizer, hypergraph_enc_config, **qformer_kwargs)
-
-            self.projector = nn.Linear(self.qformer.roberta_config.hidden_size, self.llm.config.hidden_size, dtype=kwargs["torch_dtype"])
-            self.ln_norm = nn.LayerNorm(self.llm.config.hidden_size, dtype=kwargs["torch_dtype"])
-
-            if args.qformer.ckpt_path is not None and not args.qformer.skip_graph_encoder:
-                logger.info(f"loading qformer ckpt from {args.qformer.ckpt_path}")
-
-                state_dict = torch.load(args.qformer.ckpt_path)
-                self.qformer.load_state_dict(
-                    state_dict,
-                    # strict=False
-                )
-
-            self.qformer = self.qformer.to(kwargs["torch_dtype"])
-        else:
-            self.qformer = None
-
+            
         if args.llm.ckpt_path is not None:
             logger.info(f"loading all ckpt from {args.llm.ckpt_path}")
             
@@ -482,35 +479,38 @@ class LLaSA(nn.Module):
         return_dict: bool | None = None,
         **loss_kwargs, # For compatibility with the transformers >= 4.46, https://github.com/huggingface/transformers/issues/34263
     ):
-        if self.num_query_tokens > 0:
-            inputs_embeds = self.construct_inputs_embeds(input_ids, qformer_inputs)
-
-            outputs = self.llm(
-                input_ids=None,
-                inputs_embeds=inputs_embeds,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=past_key_values,
-                labels=labels,
-                use_cache=use_cache,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-                **loss_kwargs,
-            )
+        if self.args.qformer.pretraining:
+            outputs = self.qformer(qformer_inputs)
         else:
-            outputs = self.llm(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=past_key_values,
-                labels=labels,
-                use_cache=use_cache,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-                **loss_kwargs,
-            )
+            if self.num_query_tokens > 0:
+                inputs_embeds = self.construct_inputs_embeds(input_ids, qformer_inputs)
+
+                outputs = self.llm(
+                    input_ids=None,
+                    inputs_embeds=inputs_embeds,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    past_key_values=past_key_values,
+                    labels=labels,
+                    use_cache=use_cache,
+                    output_attentions=output_attentions,
+                    output_hidden_states=output_hidden_states,
+                    return_dict=return_dict,
+                    **loss_kwargs,
+                )
+            else:
+                outputs = self.llm(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    past_key_values=past_key_values,
+                    labels=labels,
+                    use_cache=use_cache,
+                    output_attentions=output_attentions,
+                    output_hidden_states=output_hidden_states,
+                    return_dict=return_dict,
+                    **loss_kwargs,
+                )
 
         return outputs
 

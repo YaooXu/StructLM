@@ -134,17 +134,14 @@ if __name__ == "__main__":
     if model_args.hytrel:
         hypergraph_enc_config.update({k:v for k,v in model_args.hytrel})
 
-    if model_args.qformer.pretraining:
-        model = GFormer(model_args, encoder_tokenizer, hypergraph_enc_config)
-    else:
-        model = LLaSA(
-            model_args,
-            hypergraph_enc_config,
-            llm_tokenizer,
-            encoder_tokenizer,
-            use_cache=False if training_args.gradient_checkpointing else True,
-            torch_dtype=torch_dtype,
-        )
+    model = LLaSA(
+        model_args,
+        hypergraph_enc_config,
+        llm_tokenizer,
+        encoder_tokenizer,
+        use_cache=False if training_args.gradient_checkpointing else True,
+        torch_dtype=torch_dtype,
+    )
 
     if training_args.should_log:
         print_trainable_params(model)

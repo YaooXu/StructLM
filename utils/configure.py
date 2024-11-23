@@ -126,3 +126,30 @@ class Configure(object):
         args.dir.dataset = DEFAULT_DATASET_DIR
         args.dir.configure = DEFAULT_CONFIGURE_DIR
         return args
+
+    @staticmethod
+    def save_to_file(cfg, file_path):
+        """
+        静态方法：将 Args 对象保存到文件
+        :param cfg: Args 对象
+        :param file_path: str, 目标文件路径
+        """
+        if not isinstance(cfg, Args):
+            raise ValueError("配置对象必须是 Args 类型")
+
+        parser = configparser.ConfigParser()
+
+        # 遍历配置对象
+        for section in dir(cfg):
+            if section.startswith("__"):  # 跳过特殊属性
+                continue
+            section_obj = getattr(cfg, section)
+            if isinstance(section_obj, Args):
+                parser[section] = {}
+                for item_name, item_value in section_obj:
+                    parser[section][item_name] = str(item_value)
+
+        # 写入到文件
+        with open(file_path, "w") as file:
+            parser.write(file)
+        print(f"配置已保存到文件: {file_path}")

@@ -46,6 +46,8 @@ from eval_json import eval_loose_json
 
 import shutil
 
+from utils.configure import Configure
+
 sys.path.append("./src")
 
 
@@ -398,7 +400,7 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
         os.makedirs(output_dir, exist_ok=True)
         logger.info(f"Saving model checkpoint to {output_dir}")
 
-        if not self.model.args.llm.skip_llm and self.model.args.llm.finetuning_type != 'freeze':
+        if self.model.llm and self.model.args.llm.finetuning_type != 'freeze':
             supported_classes = (PreTrainedModel,) if not is_peft_available() else (
                 PreTrainedModel, PeftModel)
             # Save a trained model and configuration using `save_pretrained()`.
@@ -427,14 +429,16 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
         output_state_dict = {
             k: _state_dict[k] for k in _state_dict if not k.startswith('llm')
         }
-        torch.save(output_state_dict, os.path.join(output_dir, "model.bin"))
-
-        if self.tokenizer is not None:
-            self.tokenizer.save_pretrained(output_dir)
+        
+        if self.model.args.qformer.pretraining:
+            output_state_dict = {k[8:]: v for k,v in output_state_dict.items() if k.startswith('qformer')}
+            torch.save(output_state_dict, os.path.join(output_dir, "qformer.bin"))
+        else:
+            torch.save(output_state_dict, os.path.join(output_dir, "model.bin"))
 
         # Good practice: save your training arguments together with the trained model
         torch.save(self.args, os.path.join(output_dir, TRAINING_ARGS_NAME))
 
         # save cfg
         cfg_name = os.path.basename(self.model.args.cfg_path)
-        shutil.copy(self.model.args.cfg_path, os.path.join(output_dir, cfg_name))
+        Configure.save_to_file(self.model.args, os.path.join(output_dir, cfg_name))

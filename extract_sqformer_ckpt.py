@@ -4,6 +4,6 @@ path = 'outputs/data/hytrel/pretraining_10M_tables/hytrel-llama/v2-10M_only_quer
 
 state_dict = torch.load(path)
 
-state_dict = {k[8:]: v for k,v in state_dict.items() if k.startswith('qformer')}
+state_dict = {k[8:]: v for k,v in state_dict.items() if k.startswith('gformer')}
 
 torch.save(state_dict, path.replace('model.bin', 'sqformer_model.bin'))

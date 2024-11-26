@@ -25,7 +25,7 @@ dataset_dir=data/roberta/wikitq
 export WANDB_PROJECT=$(basename "$dataset_dir")
 wandb online
 
-# qformer_ckpt_path=StructLM_cwq_webqsp/v2.5_1792_2048_10_1_0.05_1e-5/checkpoint-10000/Qformer.bin
+# qformer_ckpt_path=StructLM_cwq_webqsp/v2.5_1792_2048_10_1_0.05_1e-5/checkpoint-10000/gformer.bin
         # --qformer_ckpt_path=${qformer_ckpt_path} \
 
         # --skip_encoder \

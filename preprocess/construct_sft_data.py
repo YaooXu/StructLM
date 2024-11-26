@@ -148,6 +148,8 @@ def construct_processed_samples(tasks, prompts_dict, is_train, output_path, one_
 
         print(processed_samples[-1]['input'])
         print(processed_samples[-1]['label'])
+        print(processed_samples[-1]['question'])
+        print('\n\n\n')
 
     print(len(processed_samples))
     with open(output_path, 'w') as f:
@@ -161,7 +163,7 @@ with open('data/processed/1-shot_examples.jsonl', 'r', encoding='utf-8') as f:
 
 output_dir = 'data/processed'
 all_tasks = ["wikitq", "hybridqa", "fetaqa", "tabmwp", "wikisql", "tab_fact", "totto", "kvret", 'compwebq', 'dart']
-# construct_processed_samples(all_tasks, train_prompts_dict, True, f'{output_dir}/custom_skginstruct.json')
+construct_processed_samples(all_tasks, train_prompts_dict, True, f'{output_dir}/custom_skginstruct.json')
 
 all_tasks += ['sqa', 'wikitabletext', 'finqa']
 construct_processed_samples(all_tasks, test_prompts_dict, False, f'{output_dir}/custom_test_skginstruct.json')

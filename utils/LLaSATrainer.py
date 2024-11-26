@@ -263,9 +263,6 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
         metrics = output.metrics
 
         predictions = self.post_process_function(predict_examples, output, self.tokenizer)
-        summary = eval_loose_json(easydict.EasyDict({}), data=predictions)
-        summary['eval_avr'] = summary.pop('avr')
-        output.metrics.update(summary)
 
         if self.args.should_log:
             cur_output_dir = f"{self.args.output_dir}/{metric_key_prefix}_{self.state.global_step}"
@@ -275,6 +272,10 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
             with open(os.path.join(cur_output_dir, "predictions.json"), "w") as f:
                 json.dump(predictions, f)
 
+            summary = eval_loose_json(easydict.EasyDict({}), data=predictions)
+            summary['eval_avr'] = summary.pop('avr')
+            output.metrics.update(summary)
+            
             with open(os.path.join(cur_output_dir, "predictions_summary.json"), "w") as f:
                 json.dump(summary, f, indent=4)
 
@@ -430,9 +431,10 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
             k: _state_dict[k] for k in _state_dict if not k.startswith('llm')
         }
         
-        if self.model.args.qformer.pretraining:
-            output_state_dict = {k[8:]: v for k,v in output_state_dict.items() if k.startswith('qformer')}
-            torch.save(output_state_dict, os.path.join(output_dir, "qformer.bin"))
+        if self.model.args.gformer.pretraining:
+            prefix = 'gformer'
+            output_state_dict = {k[len(prefix):]: v for k,v in output_state_dict.items() if k.startswith(prefix)}
+            torch.save(output_state_dict, os.path.join(output_dir, "gformer.bin"))
         else:
             torch.save(output_state_dict, os.path.join(output_dir, "model.bin"))
 

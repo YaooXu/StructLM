@@ -58,7 +58,7 @@ class WarppedTrainingArguments(TrainingArguments):
     preprocessing_num_workers: int = field(default=8)
     data_cache_dir: Optional[str] = field(default=None, metadata={"help": "The datasets processed stored"})
 
-    cfg: str = field(default="qformer/v3.cfg")
+    cfg: str = field(default="gformer/v3.cfg")
 
     output_dir: str = field(default="trainer_outputs")
 
@@ -89,7 +89,7 @@ if __name__ == "__main__":
         logger.info(f'loading cfg file from {cfg_file}')
         
         model_args = Configure.Get_from_file(cfg_file)
-        model_args.qformer.ckpt_path = None
+        model_args.gformer.ckpt_path = None
         model_args.llm.ckpt_path = training_args.ckpt_dir
         
     else:
@@ -118,9 +118,9 @@ if __name__ == "__main__":
         # for llama model
         llm_tokenizer.pad_token = llm_tokenizer.eos_token
         
-    encoder_tokenizer = AutoTokenizer.from_pretrained(model_args.qformer.model_name_or_path, use_fast=False)
+    encoder_tokenizer = AutoTokenizer.from_pretrained(model_args.gformer.model_name_or_path, use_fast=False)
 
-    hypergraph_enc_config = AutoConfig.from_pretrained(model_args.qformer.model_name_or_path)
+    hypergraph_enc_config = AutoConfig.from_pretrained(model_args.gformer.model_name_or_path)
     hypergraph_enc_config.update(
         {
             "vocab_size": len(encoder_tokenizer),
@@ -157,22 +157,21 @@ if __name__ == "__main__":
             max_seq_length=training_args.max_seq_length,
             max_desc_length=training_args.max_desc_length,
             max_qformer_length=training_args.max_qformer_length,
-            num_query_tokens=model_args.qformer.num_query_tokens,
-            qformer_pretraining=model_args.qformer.pretraining
+            num_query_tokens=model_args.gformer.num_query_tokens,
+            qformer_pretraining=model_args.gformer.pretraining
         )
         
-        if not model_args.qformer.pretraining:
-            eval_dataset = build_instruction_dataset(
-                dataset_dir / f"val.pq",
-                llm_tokenizer,
-                encoder_tokenizer,
-                max_seq_length=training_args.max_seq_length,
-                max_desc_length=training_args.max_desc_length,
-                max_qformer_length=training_args.max_qformer_length,
-                num_query_tokens=model_args.qformer.num_query_tokens,
-                qformer_pretraining=model_args.qformer.pretraining
-            )
-            eval_dataset = eval_dataset.select(random.sample(range(len(eval_dataset)), k=min(1000, len(eval_dataset))))
+        eval_dataset = build_instruction_dataset(
+            dataset_dir / f"val.pq",
+            llm_tokenizer,
+            encoder_tokenizer,
+            max_seq_length=training_args.max_seq_length,
+            max_desc_length=training_args.max_desc_length,
+            max_qformer_length=training_args.max_qformer_length,
+            num_query_tokens=model_args.gformer.num_query_tokens,
+            qformer_pretraining=model_args.gformer.pretraining
+        )
+        eval_dataset = eval_dataset.select(random.sample(range(len(eval_dataset)), k=min(1000, len(eval_dataset))))
 
     if training_args.do_predict:
         test_dataset = build_instruction_dataset(
@@ -182,9 +181,9 @@ if __name__ == "__main__":
             max_seq_length=training_args.max_seq_length,
             max_desc_length=training_args.max_desc_length,
             max_qformer_length=training_args.max_qformer_length,
-            num_query_tokens=model_args.qformer.num_query_tokens,
+            num_query_tokens=model_args.gformer.num_query_tokens,
             training=False,
-            qformer_pretraining=model_args.qformer.pretraining
+            qformer_pretraining=model_args.gformer.pretraining
         )
         test_examples = load_jsonl(dataset_dir / f"ori_test.jsonl")
 

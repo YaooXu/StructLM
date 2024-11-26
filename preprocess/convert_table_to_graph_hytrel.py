@@ -53,7 +53,7 @@ def convert_kg_tups_bidir(kg_tuples):
     return new_kg_tuples
 
 
-def obtain_samples(process_idx, samples, cache_dir, cache_graphs, model_path, tokenizer):
+def obtain_samples(process_idx, samples, cache_dir, cache_graphs, pretraining, model_path, tokenizer):
     def get_zip_file_and_name(sample):
         zip_file_path = f"{cache_dir}/{sample['task']}/{sample['task_id'] // 2000}.zip"
         graph_name = f"graph_{sample['task_id']}.pkl"
@@ -144,7 +144,7 @@ if __name__ == "__main__":
     output_dir = f"data/all-table-kg-schema-tasks"
     os.makedirs(output_dir, exist_ok=True)
 
-    cache_graphs = True
+    cache_graphs = False
     cache_dir = f"data/all-table-kg-schema-tasks"
 
     tokenizer = AutoTokenizer.from_pretrained(model_path, device_map="auto")
@@ -170,7 +170,7 @@ if __name__ == "__main__":
             for i in range(n_process):
                 ed = st + num_samples_in_chunk
                 ed = min(ed, num_samples)
-                jobs.append([i, all_samples[st:ed], cur_cache_dir, cache_graphs, model_path, tokenizer])
+                jobs.append([i, all_samples[st:ed], cur_cache_dir, cache_graphs, pretraining ,model_path, tokenizer])
                 st = ed
 
             results = pool.starmap(obtain_samples, jobs)
@@ -195,6 +195,7 @@ if __name__ == "__main__":
             write_jsonl(f"{output_dir}/ori_val.jsonl", all_samples)
 
         else:
+            print(all_samples[0])
             df = pd.DataFrame(all_samples)
             dataset = Dataset.from_pandas(df)
             dataset.to_parquet(f"{output_dir}/train.pq")

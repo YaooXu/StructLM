@@ -258,7 +258,7 @@ class GraphDataset(Dataset):
 
             graph = sample['graph']
         else:
-            question = ''
+            question = sample['question']
 
             if type(sample['input']) is list:
                 # pretraining gnn and g-former based on llm
@@ -286,7 +286,7 @@ class GraphDataset(Dataset):
         else:
             graph = sample['graph']
     
-        # qformer input and target (for pretraining)
+        # gformer input and target (for pretraining)
         tokenized_input = self.encoder_tokenizer(question, return_attention_mask=False, add_special_tokens=False)
         tokenized_target = self.encoder_tokenizer(label, return_attention_mask=False, add_special_tokens=False)
         
@@ -388,7 +388,7 @@ class DataCollatorForGraphSupervisedDataset(object):
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
         self._set_llm_padding_side()
 
-        # Qformer input
+        # gformer input
         graphs = [BipartiteData(**instance['qformer_input']["graph"]) for instance in instances]
         graphs = Batch.from_data_list(graphs, follow_batch=['x_s', 'x_t'])
         
@@ -416,7 +416,7 @@ class DataCollatorForGraphSupervisedDataset(object):
         } 
 
         if "input_ids" not in instances[0]:
-            # qformer pretraining
+            # gformer pretraining
             return batch
 
         # LLM input

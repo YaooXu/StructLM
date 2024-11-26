@@ -82,12 +82,12 @@ class GFormer(nn.Module):
         super().__init__()
 
         self.args = args
-        self.num_query_tokens = args.qformer.num_query_tokens
-        self.strategy = args.qformer.strategy
+        self.num_query_tokens = args.gformer.num_query_tokens
+        self.strategy = args.gformer.strategy
 
         self.encoder_tokenizer = encoder_tokenizer
         
-        self.roberta_config = AutoConfig.from_pretrained(args.qformer.model_name_or_path)
+        self.roberta_config = AutoConfig.from_pretrained(args.gformer.model_name_or_path)
         self.config = self.roberta_config
 
         # if "inter" in self.strategy:
@@ -95,7 +95,7 @@ class GFormer(nn.Module):
 
         if self.strategy[:2] == "v3":
             self.graph_encoder = HyperGraphEncoder(hypergraph_enc_config)
-            if self.args.qformer.freeze_encoder:
+            if self.args.gformer.freeze_encoder:
                 self.graph_encoder.requires_grad_(False)
 
             self.roberta_config.add_cross_attention = True
@@ -106,22 +106,22 @@ class GFormer(nn.Module):
 
             from .Qformer_roberta import RobertaForCausalLM
 
-            self.Qformer = RobertaForCausalLM.from_pretrained(
-                args.qformer.model_name_or_path, config=self.roberta_config,
+            self.model = RobertaForCausalLM.from_pretrained(
+                args.gformer.model_name_or_path, config=self.roberta_config,
             )
 
-            if self.args.qformer.model_finetuning_type == 'full':
-                self.Qformer.requires_grad_(True)
-            elif self.args.qformer.model_finetuning_type == 'lora':
+            if self.args.gformer.model_finetuning_type == 'full':
+                self.model.requires_grad_(True)
+            elif self.args.gformer.model_finetuning_type == 'lora':
                 peft_config = LoraConfig(
                     task_type=TaskType.CAUSAL_LM,
                     inference_mode=False,
-                    target_modules=args.qformer.target_modules.split(","),
-                    r=args.qformer.r,
-                    lora_alpha=args.qformer.lora_alpha,
-                    lora_dropout=args.qformer.lora_dropout,
+                    target_modules=args.gformer.target_modules.split(","),
+                    r=args.gformer.r,
+                    lora_alpha=args.gformer.lora_alpha,
+                    lora_dropout=args.gformer.lora_dropout,
                 )
-                self.Qformer = get_peft_model(self.Qformer, peft_config)
+                self.model = get_peft_model(self.model, peft_config)
             
             self.query_token_embeds = nn.Parameter(torch.zeros(self.num_query_tokens, self.roberta_config.hidden_size))
             self.query_token_embeds.data.normal_(mean=0.0, std=self.roberta_config.initializer_range)
@@ -144,7 +144,7 @@ class GFormer(nn.Module):
         self.encoder_tokenizer.dec_token_id = self.encoder_tokenizer.convert_tokens_to_ids("<dec>")
         self.encoder_tokenizer.gen_token_id = self.encoder_tokenizer.convert_tokens_to_ids("<gen>")
         
-        self.Qformer.resize_token_embeddings(len(self.encoder_tokenizer))
+        self.model.resize_token_embeddings(len(self.encoder_tokenizer))
     
     @property
     def device(self):
@@ -158,17 +158,17 @@ class GFormer(nn.Module):
         return query_embeds
 
     def gen_query_embeds_v3(self, qformer_inputs, llm, llm_graph_pad_token_id):
-        input_ids = qformer_inputs["input_ids"]
-        question_attention_mask = qformer_inputs["attention_mask"]
-        batch_size = input_ids.shape[0]
+        text_ids, text_atts = qformer_inputs["input_ids"], qformer_inputs["attention_mask"]
 
-        if self.args.qformer.skip_graph_encoder:
+        batch_size = text_ids.shape[0]
+
+        if self.args.gformer.skip_graph_encoder:
             query_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
         else:
-            if self.args.qformer.without_gnn:
+            if self.args.gformer.without_gnn:
                 graph_embeds, graph_attention_mask = None, None
             else:
-                if self.args.qformer.only_gnn:
+                if self.args.gformer.only_gnn:
                     list_graph_embeds = self.graph_encoder(qformer_inputs["graphs"], return_list_graph_embeds=True)
                     return list_graph_embeds
                 else:
@@ -180,21 +180,15 @@ class GFormer(nn.Module):
             # inputs_embeds = query_embeds
             # attention_mask = query_atts
             
-            if self.args.qformer.only_query_embeds:
-                attention_mask = query_atts
-            else:
-                attention_mask = torch.cat([query_atts, question_attention_mask], dim=1)
-
+            attention_mask = torch.cat([query_atts, text_atts], dim=1)
             query_output = self.model.roberta(
-                input_ids=input_ids,
+                text_ids,
+                query_embeds=query_embeds,
                 attention_mask=attention_mask,
                 encoder_hidden_states=graph_embeds,
                 encoder_attention_mask=graph_attention_mask,
-                use_cache=False,
+                use_cache=True,
                 return_dict=True,
-                query_length=self.num_query_tokens,
-                query_embeds=query_embeds, 
-                only_query_embeds=self.args.qformer.only_query_embeds
             )
 
 
@@ -223,7 +217,7 @@ class GFormer(nn.Module):
 
         ##================= Question Answering ========================##
         attention_mask = torch.cat([query_atts, text_atts], dim=1)
-        query_output = self.Qformer.roberta(
+        query_output = self.model.roberta(
             text_ids,
             query_embeds=query_embeds,
             attention_mask=attention_mask,
@@ -237,7 +231,7 @@ class GFormer(nn.Module):
         label_atts = torch.ones(labels.shape).to(query_embeds.device)
 
         attention_mask = torch.cat([query_atts, text_atts, label_atts], dim=1)
-        lm_output = self.Qformer(
+        lm_output = self.model(
             output_ids,
             attention_mask=attention_mask,
             past_key_values=query_output.past_key_values,
@@ -300,7 +294,7 @@ class GFormer(nn.Module):
             graph_embeds.device
         )
 
-        output_itm = self.Qformer.roberta(
+        output_itm = self.model.roberta(
             text_ids_all,
             query_embeds=query_embeds_itm,
             attention_mask=attention_mask_all,
@@ -333,34 +327,35 @@ class LLaSA(nn.Module):
         self.llm_pad_token_id = None
 
         self.args = args
-        self.num_query_tokens = args.qformer.num_query_tokens
+        self.num_query_tokens = args.gformer.num_query_tokens
 
-        # qformer
+        # gformer
         if self.num_query_tokens > 0:
 
             qformer_kwargs = {}
-            if self.args.qformer.strategy == 'pt':
+            if self.args.gformer.strategy == 'pt':
                 llm_config = AutoConfig.from_pretrained(args.llm.model_name_or_path)
                 qformer_kwargs['llm_hidden_size'] = llm_config.hidden_size
                 qformer_kwargs['llm_initializer_range'] = llm_config.initializer_range
                 
-            self.qformer = GFormer(args, encoder_tokenizer, hypergraph_enc_config, **qformer_kwargs)
+            self.gformer = GFormer(args, encoder_tokenizer, hypergraph_enc_config, **qformer_kwargs)
 
-            if args.qformer.ckpt_path is not None and not args.qformer.skip_graph_encoder:
-                logger.info(f"loading qformer ckpt from {args.qformer.ckpt_path}")
+            if args.gformer.ckpt_path is not None and not args.gformer.skip_graph_encoder:
+                logger.info(f"loading gformer ckpt from {args.gformer.ckpt_path}")
 
-                state_dict = torch.load(args.qformer.ckpt_path)
-                self.qformer.load_state_dict(
+                state_dict = torch.load(args.gformer.ckpt_path)
+                state_dict = {k.replace('Qformer', 'model'): v for k,v in state_dict.items()}
+                self.gformer.load_state_dict(
                     state_dict,
                     # strict=False
                 )
 
-            self.qformer = self.qformer.to(kwargs["torch_dtype"])
+            self.gformer = self.gformer.to(kwargs["torch_dtype"])
         else:
-            self.qformer = None
+            self.gformer = None
 
         # llm
-        if not self.args.qformer.pretraining:
+        if not self.args.gformer.pretraining:
             self.llm: AutoModelForCausalLM = AutoModelForCausalLM.from_pretrained(
                 args.llm.model_name_or_path, 
                 attn_implementation=args.llm.attn_implementation, 
@@ -368,7 +363,7 @@ class LLaSA(nn.Module):
             )
             self.init_tokenizer_and_embeds(llm_tokenizer, encoder_tokenizer, DEFAULT_GRAPH_PAD_TOKEN)
 
-            self.projector = nn.Linear(hypergraph_enc_config.hidden_size, self.llm.config.hidden_size, dtype=kwargs["torch_dtype"])
+            self.projector = nn.Linear(self.gformer.config.hidden_size, self.llm.config.hidden_size, dtype=kwargs["torch_dtype"])
             self.ln_norm = nn.LayerNorm(self.llm.config.hidden_size, dtype=kwargs["torch_dtype"])
 
             if args.llm.finetuning_type == "full":
@@ -392,7 +387,7 @@ class LLaSA(nn.Module):
             # elif args.llm.finetuning_type == 'pt':
             #     self.llm.requires_grad_(False)
 
-            #     self.query_token_embeds = nn.Parameter(torch.zeros(args.qformer.num_query_tokens, self.llm.config.hidden_size))
+            #     self.query_token_embeds = nn.Parameter(torch.zeros(args.gformer.num_query_tokens, self.llm.config.hidden_size))
             #     self.query_token_embeds.data.normal_(mean=0.0, std=self.llm.config.initializer_range)
             elif args.llm.finetuning_type == "freeze":
                 self.llm.requires_grad_(False)
@@ -404,7 +399,7 @@ class LLaSA(nn.Module):
         if args.llm.ckpt_path is not None:
             logger.info(f"loading all ckpt from {args.llm.ckpt_path}")
             
-            # this ckpt also include qformer
+            # this ckpt also include gformer
             self.load_state_dict(
                 torch.load(os.path.join(args.llm.ckpt_path, "model.bin")),
                 strict=False
@@ -444,9 +439,12 @@ class LLaSA(nn.Module):
         inputs_embeds = self.llm.get_input_embeddings()(input_ids)
         batch_size = inputs_embeds.shape[0]
 
-        query_embeds = self.qformer.gen_query_embeds(qformer_inputs, self.llm, self.llm_graph_pad_token_id)
+        query_embeds = self.gformer.gen_query_embeds(qformer_inputs, self.llm, self.llm_graph_pad_token_id)
 
         if type(query_embeds) is list:
+            # llaga or g-retrieve setting
+            if self.num_query_tokens == 1:
+                query_embeds = [query_embed.mean(dim=0, keepdim=True) for query_embed in query_embeds]
             res_embeds = [self.ln_norm(self.projector(query_embed.to(inputs_embeds.dtype))) for query_embed in query_embeds]
         else:
             query_embeds = query_embeds.to(inputs_embeds.dtype)
@@ -488,8 +486,8 @@ class LLaSA(nn.Module):
         return_dict: bool | None = None,
         **loss_kwargs, # For compatibility with the transformers >= 4.46, https://github.com/huggingface/transformers/issues/34263
     ):
-        if self.args.qformer.pretraining:
-            outputs = self.qformer(qformer_inputs)
+        if self.args.gformer.pretraining:
+            outputs = self.gformer(qformer_inputs)
         else:
             if self.num_query_tokens > 0:
                 inputs_embeds = self.construct_inputs_embeds(input_ids, qformer_inputs)
@@ -577,6 +575,6 @@ class LLaSA(nn.Module):
         # save only the trainable weights
         state_dict = kwargs["state_dict"]
 
-        output_state_dict = {k: state_dict[k] for k in state_dict if "qformer" in k}
+        output_state_dict = {k: state_dict[k] for k in state_dict if "gformer" in k}
 
-        torch.save(output_state_dict, os.path.join(save_directory, "qformer.bin"))
+        torch.save(output_state_dict, os.path.join(save_directory, "gformer.bin"))

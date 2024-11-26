@@ -25,7 +25,7 @@ from torch_geometric.data.batch import Batch
 import torch.nn.functional as F
 import datasets
 from dataset.data import BipartiteData #StructDataConverter, _get_dist_mat
-from utils.utils import load_json
+from utils.utils import load_json, pad_2d_tensor
 
 from transformers.data import DataCollatorWithPadding
 
@@ -296,16 +296,10 @@ class GraphDataset(Dataset):
         qformer_input_ids = torch.LongTensor(s)[:self.max_qformer_length]
         qformer_labels = torch.LongTensor(t)[:self.max_qformer_length]
         
-        qformer_input_ids = F.pad(
-            qformer_input_ids, (0, self.max_qformer_length - qformer_input_ids.size(0)), value=self.encoder_tokenizer.pad_token_id
-        )
-        qformer_output_ids = F.pad(
-            qformer_labels, (0, self.max_qformer_length - qformer_labels.size(0)), value=self.encoder_tokenizer.pad_token_id
-        )
-        qformer_labels = F.pad(
-            qformer_labels, (0, self.max_qformer_length - qformer_labels.size(0)), value=IGNORE_INDEX
-        )        
-        
+        qformer_input_ids = pad_2d_tensor(qformer_input_ids, self.max_qformer_length, self.encoder_tokenizer.pad_token_id)
+        qformer_output_ids = pad_2d_tensor(qformer_labels, self.max_qformer_length, self.encoder_tokenizer.pad_token_id)
+        qformer_labels = pad_2d_tensor(qformer_labels, self.max_qformer_length, IGNORE_INDEX)
+
         qformer_input = {
             'graph': graph,
             "input_ids": qformer_input_ids,
@@ -367,6 +361,7 @@ class DataCollatorForGraphSupervisedDataset(object):
 
     llm_tokenizer: transformers.PreTrainedTokenizer
     encoder_tokenizer: transformers.PreTrainedTokenizer
+    only_return_gformer_input: bool
 
     def _set_llm_padding_side(self):
         # double-underscore name prevents subclasses from (accidentally) overriding the method!
@@ -395,14 +390,10 @@ class DataCollatorForGraphSupervisedDataset(object):
         # graphs = merge_graph(graphs)
         # print(graphs['dist_mat'].shape)
 
-        qformer_input_ids = [instance['qformer_input']["input_ids"] for instance in instances]
-        qformer_input_ids = self.encoder_tokenizer.pad({"input_ids": qformer_input_ids})["input_ids"]
-
-        qformer_output_ids = [instance['qformer_input']["output_ids"] for instance in instances]
-        qformer_output_ids = self.encoder_tokenizer.pad({"input_ids": qformer_input_ids})["input_ids"]
-
-        qformer_labels = [instance['qformer_input']["labels"] for instance in instances]
-        qformer_labels = self._pad_labels(qformer_labels, self.encoder_tokenizer.padding_side)
+        # no need to pad, as they have the same length
+        qformer_input_ids = torch.stack([instance['qformer_input']["input_ids"] for instance in instances])
+        qformer_output_ids = torch.stack([instance['qformer_input']["output_ids"] for instance in instances])
+        qformer_labels = torch.stack([instance['qformer_input']["labels"] for instance in instances])
 
         qformer_inputs = {
             "input_ids": qformer_input_ids,
@@ -415,7 +406,7 @@ class DataCollatorForGraphSupervisedDataset(object):
             'qformer_inputs': qformer_inputs
         } 
 
-        if "input_ids" not in instances[0]:
+        if self.only_return_gformer_input:
             # gformer pretraining
             return batch
 

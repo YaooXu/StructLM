@@ -432,7 +432,7 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
         }
         
         if self.model.args.gformer.pretraining:
-            prefix = 'gformer'
+            prefix = 'gformer.'
             output_state_dict = {k[len(prefix):]: v for k,v in output_state_dict.items() if k.startswith(prefix)}
             torch.save(output_state_dict, os.path.join(output_dir, "gformer.bin"))
         else:

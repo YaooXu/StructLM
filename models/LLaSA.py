@@ -344,7 +344,7 @@ class LLaSA(nn.Module):
                 logger.info(f"loading gformer ckpt from {args.gformer.ckpt_path}")
 
                 state_dict = torch.load(args.gformer.ckpt_path)
-                state_dict = {k.replace('Qformer', 'model'): v for k,v in state_dict.items()}
+                state_dict = {k[1:] if k[0] == '.' else k: v for k,v in state_dict.items()}
                 self.gformer.load_state_dict(
                     state_dict,
                     # strict=False

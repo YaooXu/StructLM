@@ -1,3 +1,4 @@
+from functools import partial
 import sys
 
 sys.path.append('./')
@@ -29,23 +30,22 @@ def preprocess_table(samples, k=10):
         tokenizer.pad_token = tokenizer.eos_token
     table_converter = TableConverter(tokenizer)
 
-    all_tables, all_questions, all_labels = [], [], []
-
     dataset = [] 
     for table in samples['table']:
 
         qa_pairs = construct_table_pretraining_questions(table, k=k)
         qa_pairs = [(question, answer) for question, answer in qa_pairs if answer != '']
 
-        dataset.append({
-            "table": table,
-            "question": [question for question, answer in qa_pairs],
-            "answer_text": [answer for question, answer in qa_pairs],
-        })
+        if len(qa_pairs):
+            dataset.append({
+                "table": table,
+                "question": [question for question, answer in qa_pairs],
+                "answer_text": [answer for question, answer in qa_pairs],
+            })
 
-    processed_samples = construct_processed_samples(dataset, train_prompts_dict)
+    sft_samples = construct_sft_samples(dataset)
 
-    results = {key: [d[key] for d in processed_samples] for key in processed_samples[0]}
+    results = {key: [d[key] for d in sft_samples] for key in sft_samples[0]}
 
     return results
 
@@ -73,7 +73,7 @@ with open(test_prompt_filepath, 'r') as f:
     test_prompts_dict = json.load(f)
 
 
-def construct_processed_samples(dataset, prompts_dict, is_train=True):
+def construct_sft_samples(samples, prompts_dict=train_prompts_dict):
     tokenizer = AutoTokenizer.from_pretrained(model_path, device_map="auto")
     table_converter = TableConverter(tokenizer)
 
@@ -81,11 +81,11 @@ def construct_processed_samples(dataset, prompts_dict, is_train=True):
 
     processed_samples = []
 
-    dataset = get_constructor(f"preprocess.seq2seq_construction.pretraining")(args).to_seq2seq(dataset)
+    samples = get_constructor(f"preprocess.seq2seq_construction.pretraining")(args).to_seq2seq(samples)
     key = 'table'
     task_name = 'wikitq'
 
-    for sample in dataset:
+    for sample in samples:
         struct_data = sample[key]
 
         all_instructions = prompts_dict[task_name]['instruction']
@@ -141,7 +141,10 @@ if __name__ == "__main__":
 
     file_path = '/cpfs/29f69eb5e2e60f26/code/pretrain/xuyao/TaBERT/data/pretrain/data.pq'
     dataset = load_dataset("parquet", data_files=file_path)['train']
-    processed_dataset1 = dataset.map(preprocess_table, batched=True, num_proc=num_proc, load_from_cache_file=False)
-    filter_dataset1 = processed_dataset1.filter(lambda sample: len(sample['question']) > 0, num_proc=num_proc)
-    print(len(filter_dataset1))
-    filter_dataset1.to_parquet('data/llm_based_pretraining/train.pq')
+
+    sft_dataset1 = dataset.map(preprocess_table, batched=True, num_proc=num_proc, load_from_cache_file=False)
+
+    print(len(sft_dataset1))
+
+    sft_dataset1.to_parquet('data/llm_based_pretraining/train.pq')
+    sft_dataset1.select(range(100)).to_parquet('data/llm_based_pretraining/val.pq')

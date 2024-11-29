@@ -113,18 +113,20 @@ def preprocess_table(samples, k=10):
         tokenizer.pad_token = tokenizer.eos_token
     table_converter = TableConverter(tokenizer)
 
-    all_graphs, all_questions, all_labels = [], [], []
+    dataset = []
     for table in samples["table"]:
         graph = table_converter._text2graph(table, return_dict=True)
 
         qa_pairs = construct_table_pretraining_questions(table, k=k)
 
-        all_graphs.append(graph)
-        all_questions.append([question for question, answer in qa_pairs])
-        all_labels.append([answer for question, answer in qa_pairs])
-
-    results = {"graph": all_graphs, "question": all_questions, "label": all_labels}
-
+        if len(qa_pairs):
+            dataset.append({
+                "graph": graph,
+                "question": [question for question, answer in qa_pairs],
+                "label": [answer for question, answer in qa_pairs],
+            })
+            
+    results = {key: [d[key] for d in dataset] for key in dataset[0]}
     return results
 
 
@@ -290,20 +292,9 @@ if __name__ == "__main__":
 
     file_path = '/cpfs/29f69eb5e2e60f26/code/pretrain/xuyao/TaBERT/data/pretrain/data.pq'
     dataset = load_dataset("parquet", data_files=file_path)['train']
-    processed_dataset1 = dataset.map(preprocess_table, batched=True, num_proc=num_proc, load_from_cache_file=False)
-    filter_dataset1 = processed_dataset1.filter(lambda sample: len(sample['question']) > 0, num_proc=num_proc)
-    print(len(filter_dataset1))
-    filter_dataset1.to_parquet('data/pretraining/train.pq')
-
-    # file_path = 'StructQformer/preprocess/graph_1.2M.pq'
-    # dataset = load_dataset("parquet", data_files=file_path)['train']
-    # processed_dataset2 = dataset.map(preprocess_graph, batched=True, num_proc=num_proc, load_from_cache_file=False)
-    # print(len(processed_dataset2))
-
-    # # repeat n times
-    # N = 2
-    # merged_dataset = concatenate_datasets([processed_dataset1] +  [processed_dataset2] * n)
-
-    # # # 查看合并后的数据集
-    # # print(merged_dataset)
-    # merged_dataset.to_parquet('data/hytrel/pretraining_10M_tables_1M_graph/train.pq')
+    
+    # remove_columns=["table"] is necessary
+    dataset = dataset.map(preprocess_table, batched=True, num_proc=num_proc, load_from_cache_file=False, remove_columns=["table"])
+    print(len(dataset))
+    dataset.to_parquet('data/pretraining/train.pq')
+    dataset.select(range(100)).to_parquet('data/pretraining/val.pq')

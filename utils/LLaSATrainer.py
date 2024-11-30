@@ -431,7 +431,7 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
             k: _state_dict[k] for k in _state_dict if not k.startswith('llm')
         }
         
-        if self.model.args.gformer.pretraining:
+        if 'pretraining' in self.args.cfg:
             prefix = 'gformer.'
             output_state_dict = {k[len(prefix):]: v for k,v in output_state_dict.items() if k.startswith(prefix)}
             torch.save(output_state_dict, os.path.join(output_dir, "gformer.bin"))
@@ -442,5 +442,5 @@ class StructQASeq2SeqTrainer(Seq2SeqTrainer):
         torch.save(self.args, os.path.join(output_dir, TRAINING_ARGS_NAME))
 
         # save cfg
-        cfg_name = os.path.basename(self.model.args.cfg_path)
+        cfg_name = os.path.basename(self.args.cfg)
         Configure.save_to_file(self.model.args, os.path.join(output_dir, cfg_name))

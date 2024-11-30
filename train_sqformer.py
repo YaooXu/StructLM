@@ -227,7 +227,7 @@ if __name__ == "__main__":
         trainer.train(resume_from_checkpoint=latest_checkpoint)
 
     if training_args.do_predict:
-        trainer.data_collator = DataCollatorForGenerating(llm_tokenizer, encoder_tokenizer)
+        trainer.data_collator = DataCollatorForGenerating(llm_tokenizer, encoder_tokenizer, False)
         logger.info("*** Predict ***")
         gen_config = {
                 "do_sample": False,

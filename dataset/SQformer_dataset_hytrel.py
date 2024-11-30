@@ -258,17 +258,17 @@ class GraphDataset(Dataset):
 
             graph = sample['graph']
         else:
-            question = sample['question']
-
             if type(sample['input']) is list:
                 # pretraining gnn and g-former based on llm
                 idx = random.choice(range(len(sample['input'])))
 
                 input_ = sample['input'][idx]
                 label = sample['label'][idx]
+                question = sample['question'][idx]
             else:
                 input_ = sample['input']
                 label = sample['label']
+                question = sample['question']
 
         if 'graph_path' in sample:
             # use cache
@@ -290,7 +290,7 @@ class GraphDataset(Dataset):
         tokenized_input = self.encoder_tokenizer(question, return_attention_mask=False, add_special_tokens=False)
         tokenized_target = self.encoder_tokenizer(label, return_attention_mask=False, add_special_tokens=False)
         
-        s = [self.encoder_tokenizer.dec_token_id] + tokenized_input["input_ids"]
+        s = [self.encoder_tokenizer.bos_token_id] + tokenized_input["input_ids"]
         t = [self.encoder_tokenizer.gen_token_id] + tokenized_target["input_ids"] + [self.encoder_tokenizer.eos_token_id]
 
         qformer_input_ids = torch.LongTensor(s)[:self.max_qformer_length]
@@ -361,7 +361,7 @@ class DataCollatorForGraphSupervisedDataset(object):
 
     llm_tokenizer: transformers.PreTrainedTokenizer
     encoder_tokenizer: transformers.PreTrainedTokenizer
-    only_return_gformer_input: bool
+    only_return_gformer_input: bool = False
 
     def _set_llm_padding_side(self):
         # double-underscore name prevents subclasses from (accidentally) overriding the method!

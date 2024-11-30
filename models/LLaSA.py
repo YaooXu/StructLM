@@ -144,7 +144,7 @@ class GFormer(nn.Module):
         self.encoder_tokenizer.dec_token_id = self.encoder_tokenizer.convert_tokens_to_ids("<dec>")
         self.encoder_tokenizer.gen_token_id = self.encoder_tokenizer.convert_tokens_to_ids("<gen>")
         
-        self.model.resize_token_embeddings(len(self.encoder_tokenizer))
+        self.model.resize_token_embeddings(len(self.encoder_tokenizer), mean_resizing=False)
     
     @property
     def device(self):
@@ -249,8 +249,8 @@ class GFormer(nn.Module):
         sim_t2i = sim_i2t = torch.ones((batch_size, batch_size * dist.get_world_size()))
         
         with torch.no_grad():
-            sim_t2i[:, rank * batch_size : rank * batch_size + batch_size].fill_diagonal_(0)
-            sim_i2t[:, rank * batch_size : rank * batch_size + batch_size].fill_diagonal_(0)            
+            sim_t2i[:, rank * batch_size : rank * batch_size + batch_size].fill_diagonal_(-10000)
+            sim_i2t[:, rank * batch_size : rank * batch_size + batch_size].fill_diagonal_(-10000)            
                 
             weights_t2i = F.softmax(sim_t2i, dim=1)
             weights_i2t = F.softmax(sim_i2t, dim=1)

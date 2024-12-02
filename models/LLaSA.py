@@ -97,19 +97,24 @@ class GFormer(nn.Module):
             self.graph_encoder = HyperGraphEncoder(hypergraph_enc_config)
             if self.args.gformer.freeze_encoder:
                 self.graph_encoder.requires_grad_(False)
-
+            self.ln_graph = nn.LayerNorm(hypergraph_enc_config.hidden_size)
+            
             self.roberta_config.add_cross_attention = True
             self.roberta_config.is_decoder = True
             self.roberta_config.query_length = self.num_query_tokens
             self.roberta_config.encoder_width = self.args.hytrel.hidden_size
-            self.roberta_config.cross_attn_start_layer = hypergraph_enc_config.num_hidden_layers
 
             from .Qformer_roberta import RobertaForCausalLM
 
             self.model = RobertaForCausalLM.from_pretrained(
                 args.gformer.model_name_or_path, config=self.roberta_config,
             )
-
+            state_dict = self.model.state_dict()
+            for name, param in self.model.named_parameters():
+                if "_query" in name:
+                    key_orig = name.replace("_query", "")
+                    param.data.copy_(state_dict[key_orig])
+                
             if self.args.gformer.model_finetuning_type == 'full':
                 self.model.requires_grad_(True)
             elif self.args.gformer.model_finetuning_type == 'lora':
@@ -125,9 +130,6 @@ class GFormer(nn.Module):
             
             self.query_token_embeds = nn.Parameter(torch.zeros(self.num_query_tokens, self.roberta_config.hidden_size))
             self.query_token_embeds.data.normal_(mean=0.0, std=self.roberta_config.initializer_range)
-
-            self.projector1 = nn.Linear(self.graph_encoder.config.hidden_size, self.roberta_config.hidden_size)
-            self.ln_norm1 = nn.LayerNorm(self.graph_encoder.config.hidden_size)
 
             self.itm_head = nn.Linear(self.roberta_config.hidden_size, 2)
 
@@ -170,15 +172,13 @@ class GFormer(nn.Module):
             else:
                 if self.args.gformer.only_gnn:
                     list_graph_embeds = self.graph_encoder(qformer_inputs["graphs"], return_list_graph_embeds=True)
-                    return list_graph_embeds
+                    return [self.ln_graph(graph_embeds) for graph_embeds in list_graph_embeds]
                 else:
                     graph_embeds, graph_attention_mask = self.graph_encoder(qformer_inputs["graphs"])
-            
+                    graph_embeds = self.ln_graph(graph_embeds)
+
             query_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
             query_atts = torch.ones(query_embeds.shape[:-1]).to(query_embeds.device)
-            
-            # inputs_embeds = query_embeds
-            # attention_mask = query_atts
             
             attention_mask = torch.cat([query_atts, text_atts], dim=1)
             query_output = self.model.roberta(
@@ -190,7 +190,6 @@ class GFormer(nn.Module):
                 use_cache=True,
                 return_dict=True,
             )
-
 
             query_embeds = query_output.last_hidden_state[:, :self.num_query_tokens, :]
 
@@ -211,7 +210,8 @@ class GFormer(nn.Module):
         batch_size = text_ids.shape[0]
 
         graph_embeds, graph_attention_mask = self.graph_encoder(qformer_inputs["graphs"])
-
+        graph_embeds = self.ln_graph(graph_embeds)
+        
         query_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
         query_atts = torch.ones(query_embeds.shape[:-1]).to(query_embeds.device)
 
@@ -243,6 +243,7 @@ class GFormer(nn.Module):
         ###============== Graph-text Matching ===================###
         text_input_ids_world = concat_all_gather(text_ids)
         text_attention_mask_world = concat_all_gather(text_atts)
+        graph_attention_mask_world = concat_all_gather(graph_attention_mask)
         graph_embeds_world = all_gather_with_grad(graph_embeds)
 
         rank = dist.get_rank()
@@ -257,11 +258,15 @@ class GFormer(nn.Module):
 
         # select a negative graph for each text
         graph_embeds_neg = []
+        graph_attns_neg = []
         for b in range(batch_size):
             neg_idx = torch.multinomial(weights_t2i[b], 1).item()
             graph_embeds_neg.append(graph_embeds_world[neg_idx])
+            graph_attns_neg.append(graph_attention_mask_world[neg_idx])
+            
         graph_embeds_neg = torch.stack(graph_embeds_neg, dim=0)
-
+        graph_attns_neg = torch.stack(graph_attns_neg, dim=0)
+        
         # select a negative text for each graph
         text_ids_neg = []
         text_atts_neg = []
@@ -290,9 +295,9 @@ class GFormer(nn.Module):
         graph_embeds_all = torch.cat(
             [graph_embeds, graph_embeds_neg, graph_embeds], dim=0
         )  # pos, neg, pos
-        graph_atts_all = torch.ones(graph_embeds_all.size()[:-1], dtype=torch.long).to(
-            graph_embeds.device
-        )
+        graph_atts_all = torch.cat(
+            [graph_attention_mask, graph_attns_neg, graph_attention_mask], dim=0
+        )  # pos, neg, pos
 
         output_itm = self.model.roberta(
             text_ids_all,

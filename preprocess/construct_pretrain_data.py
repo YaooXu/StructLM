@@ -296,5 +296,13 @@ if __name__ == "__main__":
     # remove_columns=["table"] is necessary
     dataset = dataset.map(preprocess_table, batched=True, num_proc=num_proc, load_from_cache_file=False, remove_columns=["table"])
     print(len(dataset))
-    dataset.to_parquet('data/pretraining/train.pq')
-    dataset.select(range(100)).to_parquet('data/pretraining/val.pq')
+    
+    # n = 0
+    # for sample in dataset:
+    #     n += len(sample['question'])
+    # print(n)
+    
+    output_dir = 'data/pretraining'
+    dataset.to_parquet(f'{output_dir}/train.pq')
+    dataset.select(range(100)).to_parquet(f'{output_dir}/val.pq')
+    dataset.select(range(100)).to_parquet(f'{output_dir}/test.pq')

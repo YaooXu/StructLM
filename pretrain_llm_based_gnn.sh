@@ -31,8 +31,8 @@ llm=llama
 
 
 cfg=hytrel/gformer_llm_based_pretraining.cfg
-include=localhost:0,1,2,3
-gas=4
+include=localhost:0,1,2,3,4,5,6,7
+gas=2
 master_port=29501
 
 echo ${cfg}
@@ -41,6 +41,7 @@ export WANDB_PROJECT=$(basename "$dataset_dir")
 
 deepspeed --master_port=${master_port} --include=${include} train_sqformer.py \
     --do_train \
+    --gradient_checkpointing \
     --bf16 \
     --deepspeed=${deepspeed_config_file} \
     --cfg=${cfg} \
@@ -48,10 +49,10 @@ deepspeed --master_port=${master_port} --include=${include} train_sqformer.py \
     --max_seq_length=${max_seq_length} \
     --dataset_dir=${dataset_dir} \
     --overwrite_output_dir \
-    --output_dir=./outputs/${dataset_dir}/${cfg} \
+    --output_dir=./new-outputs/${dataset_dir}/${cfg} \
     --seed=0 \
     --num_train_epochs=${num_train_epochs} \
-    --per_device_train_batch_size=4 \
+    --per_device_train_batch_size=8 \
     --gradient_accumulation_steps=${gas} \
     --per_device_eval_batch_size=16 \
     --save_strategy=steps \

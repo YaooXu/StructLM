@@ -148,3 +148,4 @@ if __name__ == "__main__":
 
     sft_dataset1.to_parquet('data/llm_based_pretraining/train.pq')
     sft_dataset1.select(range(100)).to_parquet('data/llm_based_pretraining/val.pq')
+    sft_dataset1.select(range(100)).to_parquet('data/llm_based_pretraining/test.pq')

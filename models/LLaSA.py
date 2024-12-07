@@ -97,7 +97,6 @@ class GFormer(nn.Module):
             self.graph_encoder = HyperGraphEncoder(hypergraph_enc_config)
             if self.args.gformer.freeze_encoder:
                 self.graph_encoder.requires_grad_(False)
-            self.ln_graph = nn.LayerNorm(hypergraph_enc_config.hidden_size)
             
             self.roberta_config.add_cross_attention = True
             self.roberta_config.is_decoder = True
@@ -109,11 +108,6 @@ class GFormer(nn.Module):
             self.model = RobertaForCausalLM.from_pretrained(
                 args.gformer.model_name_or_path, config=self.roberta_config,
             )
-            state_dict = self.model.state_dict()
-            for name, param in self.model.named_parameters():
-                if "_query" in name:
-                    key_orig = name.replace("_query", "")
-                    param.data.copy_(state_dict[key_orig])
                 
             if self.args.gformer.model_finetuning_type == 'full':
                 self.model.requires_grad_(True)
@@ -142,8 +136,7 @@ class GFormer(nn.Module):
         self.init_tokenizer_and_embeds()
     
     def init_tokenizer_and_embeds(self):
-        self.encoder_tokenizer.add_tokens(["<dec>", "<gen>"], special_tokens=True)
-        self.encoder_tokenizer.dec_token_id = self.encoder_tokenizer.convert_tokens_to_ids("<dec>")
+        self.encoder_tokenizer.add_tokens(["<gen>"], special_tokens=True)
         self.encoder_tokenizer.gen_token_id = self.encoder_tokenizer.convert_tokens_to_ids("<gen>")
         
         self.model.resize_token_embeddings(len(self.encoder_tokenizer), mean_resizing=False)
@@ -172,10 +165,9 @@ class GFormer(nn.Module):
             else:
                 if self.args.gformer.only_gnn:
                     list_graph_embeds = self.graph_encoder(qformer_inputs["graphs"], return_list_graph_embeds=True)
-                    return [self.ln_graph(graph_embeds) for graph_embeds in list_graph_embeds]
+                    return list_graph_embeds
                 else:
                     graph_embeds, graph_attention_mask = self.graph_encoder(qformer_inputs["graphs"])
-                    graph_embeds = self.ln_graph(graph_embeds)
 
             query_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
             query_atts = torch.ones(query_embeds.shape[:-1]).to(query_embeds.device)
@@ -210,7 +202,6 @@ class GFormer(nn.Module):
         batch_size = text_ids.shape[0]
 
         graph_embeds, graph_attention_mask = self.graph_encoder(qformer_inputs["graphs"])
-        graph_embeds = self.ln_graph(graph_embeds)
         
         query_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
         query_atts = torch.ones(query_embeds.shape[:-1]).to(query_embeds.device)
@@ -349,7 +340,6 @@ class LLaSA(nn.Module):
                 logger.info(f"loading gformer ckpt from {args.gformer.ckpt_path}")
 
                 state_dict = torch.load(args.gformer.ckpt_path)
-                state_dict = {k[1:] if k[0] == '.' else k: v for k,v in state_dict.items()}
                 self.gformer.load_state_dict(
                     state_dict,
                     # strict=False
@@ -358,6 +348,10 @@ class LLaSA(nn.Module):
             self.gformer = self.gformer.to(kwargs["torch_dtype"])
         else:
             self.gformer = None
+            
+            # for compatibility
+            encoder_tokenizer.add_tokens(["<gen>"], special_tokens=True)
+            encoder_tokenizer.gen_token_id = encoder_tokenizer.convert_tokens_to_ids("<gen>")
 
         # llm
         if not self.args.gformer.pretraining:
@@ -368,8 +362,9 @@ class LLaSA(nn.Module):
             )
             self.init_tokenizer_and_embeds(llm_tokenizer, encoder_tokenizer, DEFAULT_GRAPH_PAD_TOKEN)
 
-            self.projector = nn.Linear(self.gformer.config.hidden_size, self.llm.config.hidden_size, dtype=kwargs["torch_dtype"])
-            self.ln_norm = nn.LayerNorm(self.llm.config.hidden_size, dtype=kwargs["torch_dtype"])
+            if self.num_query_tokens > 0:
+                self.projector = nn.Linear(self.gformer.config.hidden_size, self.llm.config.hidden_size, dtype=kwargs["torch_dtype"])
+                self.ln_norm = nn.LayerNorm(self.llm.config.hidden_size, dtype=kwargs["torch_dtype"])
 
             if args.llm.finetuning_type == "full":
                 self.llm.requires_grad_(True)
@@ -387,6 +382,7 @@ class LLaSA(nn.Module):
                         lora_alpha=args.llm.lora_alpha,
                         lora_dropout=args.llm.lora_dropout,
                     )
+                    self.llm.enable_input_require_grads()
                     self.llm = get_peft_model(self.llm, peft_config)
                     self.llm.print_trainable_parameters()
             # elif args.llm.finetuning_type == 'pt':

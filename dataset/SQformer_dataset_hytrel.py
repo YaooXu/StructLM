@@ -285,7 +285,7 @@ class GraphDataset(Dataset):
                 print(e)
         else:
             graph = sample['graph']
-    
+        
         # gformer input and target (for pretraining)
         tokenized_input = self.encoder_tokenizer(question, return_attention_mask=False, add_special_tokens=False)
         tokenized_target = self.encoder_tokenizer(label, return_attention_mask=False, add_special_tokens=False)

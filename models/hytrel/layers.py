@@ -235,7 +235,7 @@ class AllSetTrans(MessagePassing):
         # concat heads then LayerNorm.
         out = self.ln0(out.view(-1, self.heads * self.hidden))
         # rFF and skip connection.
-        out = self.ln1(out + F.relu(self.rFF(out)))
+        out = self.ln1(out + F.gelu(self.rFF(out)))
 
         if isinstance(return_attention_weights, bool):
             assert alpha is not None

@@ -206,6 +206,34 @@ class GFormer(nn.Module):
         query_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
         query_atts = torch.ones(query_embeds.shape[:-1]).to(query_embeds.device)
 
+        # ##================= Question Answering ========================##
+        # attention_mask = torch.cat([query_atts, qformer_inputs["question_ids"]], dim=1)
+        # query_output = self.model.roberta(
+        #     qformer_inputs['question_ids'],
+        #     query_embeds=query_embeds,
+        #     attention_mask=attention_mask,
+        #     encoder_hidden_states=graph_embeds,
+        #     encoder_attention_mask=graph_attention_mask,
+        #     use_cache=True,
+        #     return_dict=True,
+        # )
+        
+        # input_ids, labels = qformer_inputs["input_ids"], qformer_inputs["labels"]
+        # attention_mask = torch.cat([query_atts, qformer_inputs['attention_mask']], dim=1)
+        # past_key_values = [(k[:, :, :self.num_query_tokens], v[:, :, :self.num_query_tokens]) for k,v in query_output.past_key_values]
+        # lm_output = self.model(
+        #     input_ids,
+        #     attention_mask=attention_mask,
+        #     past_key_values=past_key_values,
+        #     return_dict=True,
+        #     labels=labels,
+        # )
+        # lm_loss = lm_output.loss
+        
+        # return {
+        #     'loss' : lm_loss
+        # }
+        
         ##================= Question Answering ========================##
         attention_mask = torch.cat([query_atts, text_atts], dim=1)
         query_output = self.model.roberta(
@@ -230,7 +258,7 @@ class GFormer(nn.Module):
             labels=labels,
         )
         lm_loss = lm_output.loss
-        
+                
         ###============== Graph-text Matching ===================###
         text_input_ids_world = concat_all_gather(text_ids)
         text_attention_mask_world = concat_all_gather(text_atts)

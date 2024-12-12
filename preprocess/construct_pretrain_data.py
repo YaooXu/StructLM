@@ -293,6 +293,7 @@ if __name__ == "__main__":
     file_path = '/cpfs/29f69eb5e2e60f26/code/pretrain/xuyao/TaBERT/data/pretrain/data.pq'
     dataset = load_dataset("parquet", data_files=file_path)['train']
     
+    dataset = dataset.select(range(10_000_000))
     # remove_columns=["table"] is necessary
     dataset = dataset.map(preprocess_table, batched=True, num_proc=num_proc, load_from_cache_file=False, remove_columns=["table"])
     print(len(dataset))
@@ -302,7 +303,7 @@ if __name__ == "__main__":
     #     n += len(sample['question'])
     # print(n)
     
-    output_dir = 'data/pretraining'
+    output_dir = 'data/pretraining_10M_tables'
     dataset.to_parquet(f'{output_dir}/train.pq')
     dataset.select(range(100)).to_parquet(f'{output_dir}/val.pq')
     dataset.select(range(100)).to_parquet(f'{output_dir}/test.pq')

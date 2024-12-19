@@ -102,6 +102,7 @@ class GFormer(nn.Module):
             self.roberta_config.is_decoder = True
             self.roberta_config.query_length = self.num_query_tokens
             self.roberta_config.encoder_width = self.args.hytrel.hidden_size
+            self.roberta_config.cross_attn_start_layer = self.roberta_config.num_hidden_layers - hypergraph_enc_config.num_hidden_layers
 
             from .Qformer_roberta import RobertaForCausalLM
 
@@ -164,7 +165,7 @@ class GFormer(nn.Module):
                 graph_embeds, graph_attention_mask = None, None
             else:
                 if self.args.gformer.only_gnn:
-                    list_graph_embeds = self.graph_encoder(qformer_inputs["graphs"], return_list_graph_embeds=True)
+                    list_graph_embeds = self.graph_encoder(qformer_inputs["graphs"], not_pad_graph_embeds=True)
                     return list_graph_embeds
                 else:
                     graph_embeds, graph_attention_mask = self.graph_encoder(qformer_inputs["graphs"])
@@ -201,38 +202,11 @@ class GFormer(nn.Module):
         text_ids, text_atts = qformer_inputs["input_ids"], qformer_inputs["attention_mask"]
         batch_size = text_ids.shape[0]
 
-        graph_embeds, graph_attention_mask = self.graph_encoder(qformer_inputs["graphs"])
+        # [batch, num_nodes, dim] * num_gnn_layers
+        list_graph_embeds, graph_attention_mask = self.graph_encoder(qformer_inputs["graphs"])
         
         query_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
         query_atts = torch.ones(query_embeds.shape[:-1]).to(query_embeds.device)
-
-        # ##================= Question Answering ========================##
-        # attention_mask = torch.cat([query_atts, qformer_inputs["question_ids"]], dim=1)
-        # query_output = self.model.roberta(
-        #     qformer_inputs['question_ids'],
-        #     query_embeds=query_embeds,
-        #     attention_mask=attention_mask,
-        #     encoder_hidden_states=graph_embeds,
-        #     encoder_attention_mask=graph_attention_mask,
-        #     use_cache=True,
-        #     return_dict=True,
-        # )
-        
-        # input_ids, labels = qformer_inputs["input_ids"], qformer_inputs["labels"]
-        # attention_mask = torch.cat([query_atts, qformer_inputs['attention_mask']], dim=1)
-        # past_key_values = [(k[:, :, :self.num_query_tokens], v[:, :, :self.num_query_tokens]) for k,v in query_output.past_key_values]
-        # lm_output = self.model(
-        #     input_ids,
-        #     attention_mask=attention_mask,
-        #     past_key_values=past_key_values,
-        #     return_dict=True,
-        #     labels=labels,
-        # )
-        # lm_loss = lm_output.loss
-        
-        # return {
-        #     'loss' : lm_loss
-        # }
         
         ##================= Question Answering ========================##
         attention_mask = torch.cat([query_atts, text_atts], dim=1)
@@ -240,7 +214,7 @@ class GFormer(nn.Module):
             text_ids,
             query_embeds=query_embeds,
             attention_mask=attention_mask,
-            encoder_hidden_states=graph_embeds,
+            encoder_hidden_states=list_graph_embeds,
             encoder_attention_mask=graph_attention_mask,
             use_cache=True,
             return_dict=True,
@@ -263,7 +237,10 @@ class GFormer(nn.Module):
         text_input_ids_world = concat_all_gather(text_ids)
         text_attention_mask_world = concat_all_gather(text_atts)
         graph_attention_mask_world = concat_all_gather(graph_attention_mask)
-        graph_embeds_world = all_gather_with_grad(graph_embeds)
+        
+        # [batch, num_gnn_layers, num_nodes, dim]
+        graph_embedes = torch.stack(list_graph_embeds, dim=1)
+        graph_embeds_world = all_gather_with_grad(graph_embedes)
 
         rank = dist.get_rank()
         sim_t2i = sim_i2t = torch.ones((batch_size, batch_size * dist.get_world_size()))
@@ -307,13 +284,15 @@ class GFormer(nn.Module):
 
         query_embeds_itm = self.query_token_embeds.unsqueeze(0).expand(text_ids_all.shape[0], -1, -1)
         query_atts_itm = torch.ones(query_embeds_itm.size()[:-1], dtype=torch.long).to(
-            graph_embeds.device
+            graph_embedes.device
         )
         attention_mask_all = torch.cat([query_atts_itm, text_atts_all], dim=1)
 
         graph_embeds_all = torch.cat(
-            [graph_embeds, graph_embeds_neg, graph_embeds], dim=0
+            [graph_embedes, graph_embeds_neg, graph_embedes], dim=0
         )  # pos, neg, pos
+        list_graph_embeds_all = [t.squeeze(1) for t in torch.split(graph_embeds_all, 1, dim=1)]
+        
         graph_atts_all = torch.cat(
             [graph_attention_mask, graph_attns_neg, graph_attention_mask], dim=0
         )  # pos, neg, pos
@@ -322,7 +301,7 @@ class GFormer(nn.Module):
             text_ids_all,
             query_embeds=query_embeds_itm,
             attention_mask=attention_mask_all,
-            encoder_hidden_states=graph_embeds_all,
+            encoder_hidden_states=list_graph_embeds_all,
             encoder_attention_mask=graph_atts_all,
             return_dict=True,
         )
@@ -334,7 +313,7 @@ class GFormer(nn.Module):
         itm_labels = torch.cat(
             [torch.ones(batch_size, dtype=torch.long), torch.zeros(2 * batch_size, dtype=torch.long)],
             dim=0,
-        ).to(graph_embeds.device)
+        ).to(graph_embedes.device)
         itm_loss = F.cross_entropy(logits, itm_labels)
         
         return {
@@ -368,10 +347,16 @@ class LLaSA(nn.Module):
                 logger.info(f"loading gformer ckpt from {args.gformer.ckpt_path}")
 
                 state_dict = torch.load(args.gformer.ckpt_path)
-                self.gformer.load_state_dict(
-                    state_dict,
-                    # strict=False
-                )
+                if args.gformer.only_gnn:
+                    state_dict.pop('query_token_embeds')
+                    self.gformer.load_state_dict(
+                        state_dict,
+                        strict=False
+                    )
+                else:
+                    self.gformer.load_state_dict(
+                        state_dict,
+                    )                   
 
             self.gformer = self.gformer.to(kwargs["torch_dtype"])
         else:
@@ -380,7 +365,7 @@ class LLaSA(nn.Module):
             # for compatibility
             encoder_tokenizer.add_tokens(["<gen>"], special_tokens=True)
             encoder_tokenizer.gen_token_id = encoder_tokenizer.convert_tokens_to_ids("<gen>")
-
+        
         # llm
         if not self.args.gformer.pretraining:
             self.llm: AutoModelForCausalLM = AutoModelForCausalLM.from_pretrained(

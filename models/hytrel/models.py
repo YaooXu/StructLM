@@ -81,22 +81,13 @@ class Encoder(nn.Module):
         self.embed_layer = Embedding(config)
         self.layer = nn.ModuleList([EncoderLayer(config) for _ in range(config.num_hidden_layers)])
 
-    def forward(self, data, return_list_graph_embeds=False):
+    def forward(self, data, not_pad_graph_embeds=False):
         embedding_s, embedding_t = self.embed_layer(data.x_s, data.x_t)
+        # embedding_t: t1, t2, t3, s1, s2, s3, s4
         embedding_t = torch.cat([embedding_t, embedding_s], dim=0)
 
         # Add self-loop
         num_nodes, num_hyper_edges = data.x_s.size(0), data.x_t.size(0)
-        # self_edge_index = torch.tensor([[i, num_hyper_edges+i] for i in range(num_nodes)]).T
-        # edge_index1 = torch.cat([data.edge_index1, self_edge_index.to(data.edge_index1.device)], dim=-1)
-        # edge_index2 = None
-
-        # if ('edge_neg_view' in self.config.to_dict() and self.config.edge_neg_view == 1):
-        #     edge_index = torch.cat([data.edge_index_corr1, self_edge_index.to(data.edge_index_corr1.device)], dim=-1)
-        # elif ('edge_neg_view' in self.config.to_dict() and self.config.edge_neg_view == 2):
-        #     edge_index = torch.cat([data.edge_index_corr2, self_edge_index.to(data.edge_index_corr2.device)], dim=-1)
-        # else:
-        #     edge_index = torch.cat([data.edge_index, self_edge_index.to(data.edge_index.device)], dim=-1)
 
         self_edge_index1 = torch.tensor([[i, num_hyper_edges + i] for i in range(num_nodes)]).T
         edge_index1 = torch.cat([data.edge_index1, self_edge_index1.to(data.edge_index1.device)], dim=-1)
@@ -111,9 +102,9 @@ class Encoder(nn.Module):
             embedding_s, embedding_t = layer_module(embedding_s, embedding_t, edge_index1, edge_index2)
             all_embedding_s.append(embedding_s)
 
-        if return_list_graph_embeds:
+        if not_pad_graph_embeds:
             # only last layer
-            list_graph_embeds, list_graph_attn = self.get_list_of_graph_embeds_and_attns(all_embedding_s[-1], x_s_idxes)
+            list_graph_embeds, _ = self.get_list_of_graph_embeds_and_attns(all_embedding_s[-1], x_s_idxes)
             return list_graph_embeds
         else:
             if 'return_all_layer' in self.config and self.config.return_all_layer:
@@ -121,12 +112,11 @@ class Encoder(nn.Module):
                 for embedding_s in all_embedding_s:
                     graph_embeds, graph_attention_mask = self.get_graphs_embeds_and_attns(embedding_s, x_s_idxes)
                     all_graph_embeds.append(graph_embeds)
-                # [batch, num_layer, num_nodes, dim]
-                graph_embeds = torch.stack(all_graph_embeds, 1)
+                # [batch, num_nodes, dim] * num_layers
+                return all_graph_embeds, graph_attention_mask
             else:
-                graph_embeds, graph_attention_mask = self.get_graphs_embeds_and_attns(embedding_s, x_s_idxes)
-
-            return graph_embeds, graph_attention_mask
+                graph_embeds, graph_attention_mask = self.get_graphs_embeds_and_attns(all_embedding_s[-1], x_s_idxes)
+                return graph_embeds, graph_attention_mask
 
     def get_list_of_graph_embeds_and_attns(self, embedding_s, x_s_idxes):
         list_graph_attn = []

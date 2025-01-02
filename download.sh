@@ -14,4 +14,4 @@
 
 # huggingface-cli download --repo-type=dataset --local-dir=data/processed/ TIGER-Lab/SKGInstruct ./skginstruct_test_file_7b.json 
 
-huggingface-cli download --repo-type=model meta-llama/Llama-2-7b-hf
+huggingface-cli download --repo-type=model nvidia/OpenMath2-Llama3.1-8B

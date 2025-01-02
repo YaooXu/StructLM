@@ -195,7 +195,7 @@ if __name__ == "__main__":
         test_dataset = test_examples = None
         
     data_collator = DataCollatorForGraphSupervisedDataset(llm_tokenizer, encoder_tokenizer, model_args.gformer.pretraining)
-
+    
     trainer = StructQASeq2SeqTrainer(
         model=model,
         args=training_args,

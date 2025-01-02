@@ -109,7 +109,15 @@ class GFormer(nn.Module):
             self.model = RobertaForCausalLM.from_pretrained(
                 args.gformer.model_name_or_path, config=self.roberta_config,
             )
-                
+            if self.args.gformer.init_query_part:
+                logger.info("init query part")
+                state_dict = self.model.state_dict()
+                for name, param in self.model.named_parameters():
+                    if "_query" in name:
+                        key_orig = name.replace("_query", "")
+                        param.data.copy_(state_dict[key_orig])
+
+   
             if self.args.gformer.model_finetuning_type == 'full':
                 self.model.requires_grad_(True)
             elif self.args.gformer.model_finetuning_type == 'lora':
@@ -154,7 +162,7 @@ class GFormer(nn.Module):
         return query_embeds
 
     def gen_query_embeds_v3(self, qformer_inputs, llm, llm_graph_pad_token_id):
-        text_ids, text_atts = qformer_inputs["input_ids"], qformer_inputs["attention_mask"]
+        text_ids, text_atts = qformer_inputs["question_ids"], qformer_inputs["question_attention_mask"]
 
         batch_size = text_ids.shape[0]
 
@@ -232,7 +240,30 @@ class GFormer(nn.Module):
             labels=labels,
         )
         lm_loss = lm_output.loss
-                
+
+        # ##================= Question Answering ========================##
+        # attention_mask = torch.cat([query_atts], dim=1)
+        # query_output = self.model.roberta(
+        #     query_embeds=query_embeds,
+        #     attention_mask=attention_mask,
+        #     encoder_hidden_states=list_graph_embeds,
+        #     encoder_attention_mask=graph_attention_mask,
+        #     use_cache=True,
+        #     return_dict=True,
+        # )
+        
+        # labels = qformer_inputs["labels"]
+
+        # attention_mask = torch.cat([query_atts, text_atts], dim=1)
+        # lm_output = self.model(
+        #     text_ids,
+        #     attention_mask=attention_mask,
+        #     past_key_values=query_output.past_key_values,
+        #     return_dict=True,
+        #     labels=labels,
+        # )
+        # lm_loss = lm_output.loss
+               
         ###============== Graph-text Matching ===================###
         text_input_ids_world = concat_all_gather(text_ids)
         text_attention_mask_world = concat_all_gather(text_atts)

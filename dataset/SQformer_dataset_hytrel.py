@@ -295,15 +295,24 @@ class GraphDataset(Dataset):
 
         qformer_input_ids = torch.LongTensor(s)[:self.max_qformer_length]
         qformer_labels = torch.LongTensor(t)[:self.max_qformer_length]
-        
+        qformer_question_ids = torch.LongTensor(s)[:self.max_qformer_length]
+
+        # s = [self.encoder_tokenizer.bos_token_id] + tokenized_input["input_ids"]
+        # t = tokenized_target["input_ids"] + [self.encoder_tokenizer.eos_token_id]
+
+        # qformer_input_ids = torch.LongTensor(s + t)[:self.max_qformer_length]
+        # qformer_labels = torch.LongTensor([IGNORE_INDEX] * len(s) + t)[:self.max_qformer_length]
+             
         qformer_input_ids = pad_2d_tensor(qformer_input_ids, self.max_qformer_length, self.encoder_tokenizer.pad_token_id)
         qformer_output_ids = pad_2d_tensor(qformer_labels, self.max_qformer_length, self.encoder_tokenizer.pad_token_id)
+        qformer_question_ids = pad_2d_tensor(qformer_question_ids, self.max_qformer_length, self.encoder_tokenizer.pad_token_id)
         qformer_labels = pad_2d_tensor(qformer_labels, self.max_qformer_length, IGNORE_INDEX)
 
         qformer_input = {
             'graph': graph,
             "input_ids": qformer_input_ids,
             "output_ids": qformer_output_ids,
+            "qformer_question_ids": qformer_question_ids,
             "labels": qformer_labels,
         }
         item = {
@@ -393,11 +402,14 @@ class DataCollatorForGraphSupervisedDataset(object):
         # no need to pad, as they have the same length
         qformer_input_ids = torch.stack([instance['qformer_input']["input_ids"] for instance in instances])
         qformer_output_ids = torch.stack([instance['qformer_input']["output_ids"] for instance in instances])
+        qformer_question_ids = torch.stack([instance['qformer_input']["qformer_question_ids"] for instance in instances])
         qformer_labels = torch.stack([instance['qformer_input']["labels"] for instance in instances])
 
         qformer_inputs = {
             "input_ids": qformer_input_ids,
             "output_ids": qformer_output_ids,
+            "question_ids": qformer_question_ids,
+            "question_attention_mask": qformer_question_ids.ne(self.encoder_tokenizer.pad_token_id),
             "labels": qformer_labels,
             "attention_mask": qformer_input_ids.ne(self.encoder_tokenizer.pad_token_id),
             "graphs": graphs,

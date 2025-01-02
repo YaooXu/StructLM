@@ -90,6 +90,8 @@ class RobertaEmbeddings(nn.Module):
         self.position_embeddings = nn.Embedding(
             config.max_position_embeddings, config.hidden_size, padding_idx=self.padding_idx
         )
+        
+        self.query_length = config.query_length
 
     def forward(
         self,
@@ -98,6 +100,7 @@ class RobertaEmbeddings(nn.Module):
         position_ids=None,
         query_embeds=None,
         past_key_values_length=0,
+        attention_mask=None
     ):
         if input_ids is not None:
             input_shape = input_ids.size()
@@ -108,7 +111,7 @@ class RobertaEmbeddings(nn.Module):
         if position_ids is None:
             if input_ids is not None:
                 # Create the position ids from the input token ids. Any padded tokens remain padded.
-                position_ids = create_position_ids_from_input_ids(input_ids, self.padding_idx, past_key_values_length)
+                position_ids = create_position_ids_from_input_ids(input_ids, self.padding_idx, past_key_values_length, attention_mask, query_length=self.query_length)
             else:
                 pass
                 # # not used，query embeds do not need position ids
@@ -912,6 +915,7 @@ class RobertaModel(RobertaPreTrainedModel):
             position_ids=position_ids,
             query_embeds=query_embeds,
             past_key_values_length=past_key_values_length,
+            attention_mask=attention_mask
         )
 
         input_shape = embedding_output.size()[:-1]
@@ -1675,7 +1679,7 @@ class RobertaForQuestionAnswering(RobertaPreTrainedModel):
         )
 
 
-def create_position_ids_from_input_ids(input_ids, padding_idx, past_key_values_length=0):
+def create_position_ids_from_input_ids(input_ids, padding_idx, past_key_values_length=0, attention_mask=None, query_length=0):
     """
     Replace non-padding symbols with their position numbers. Position numbers begin at padding_idx+1. Padding symbols
     are ignored. This is modified from fairseq's `utils.make_positions`.
@@ -1687,5 +1691,12 @@ def create_position_ids_from_input_ids(input_ids, padding_idx, past_key_values_l
     """
     # The series of casts and type-conversions here are carefully balanced to both work with ONNX export and XLA.
     mask = input_ids.ne(padding_idx).int()
-    incremental_indices = (torch.cumsum(mask, dim=1).type_as(mask) + past_key_values_length) * mask
+    if past_key_values_length != 0:
+        # should be 0, 1, 2, 3, [MASK], [MASK], [MASK], 4, 5, 6
+        new_past_key_values_length = torch.sum(attention_mask[:, query_length:input_ids.size(1)], dim=1).type_as(mask)
+        new_past_key_values_length = new_past_key_values_length.unsqueeze(-1)
+    else:
+        new_past_key_values_length = past_key_values_length
+        
+    incremental_indices = (torch.cumsum(mask, dim=1).type_as(mask) + new_past_key_values_length) * mask
     return incremental_indices.long() + padding_idx

@@ -290,8 +290,8 @@ class GraphDataset(Dataset):
         tokenized_input = self.encoder_tokenizer(question, return_attention_mask=False, add_special_tokens=False)
         tokenized_target = self.encoder_tokenizer(label, return_attention_mask=False, add_special_tokens=False)
         
-        s = [self.encoder_tokenizer.bos_token_id] + tokenized_input["input_ids"]
-        t = [self.encoder_tokenizer.gen_token_id] + tokenized_target["input_ids"] + [self.encoder_tokenizer.eos_token_id]
+        s = [self.encoder_tokenizer.gen_token_id] + tokenized_input["input_ids"]
+        t = [self.encoder_tokenizer.bos_token_id] + tokenized_target["input_ids"] + [self.encoder_tokenizer.eos_token_id]
 
         qformer_input_ids = torch.LongTensor(s)[:self.max_qformer_length]
         qformer_labels = torch.LongTensor(t)[:self.max_qformer_length]

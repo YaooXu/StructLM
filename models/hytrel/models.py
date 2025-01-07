@@ -62,13 +62,13 @@ class EncoderLayer(nn.Module):
         else:
             reversed_edge_index = edge_index2
         # from nodes to hyper-edges
-        embedding_t_tem = F.gelu(self.V2E(embedding_s, edge_index1))
+        embedding_t_tem = F.relu(self.V2E(embedding_s, edge_index1))
 
         # from hyper-edges to nodes
         embedding_t = torch.cat([embedding_t, embedding_t_tem], dim=-1)
         # fuse the output t_embeds with original t_embeds, or the t_embeds will not have the original info
         embedding_t = F.dropout(self.fuse(embedding_t), p=self.dropout, training=self.training)
-        embedding_s = F.gelu(self.E2V(embedding_t, reversed_edge_index))
+        embedding_s = F.relu(self.E2V(embedding_t, reversed_edge_index))
         embedding_s = F.dropout(embedding_s, p=self.dropout, training=self.training)
 
         return embedding_s, embedding_t

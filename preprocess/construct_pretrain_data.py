@@ -31,7 +31,7 @@ def sample_ignoring_element(lst, ignore_element):
     return sampled_element
 
 
-def construct_table_pretraining_questions(table, k=10):
+def construct_table_pretraining_questions(table, k=20):
     # table: headers : [], rows: [[...], [...], ]
     num_rows = len(table["rows"])
     num_cols = len(table["header"])
@@ -54,7 +54,7 @@ def construct_table_pretraining_questions(table, k=10):
 
     def construct_template2():
         template = (
-            'In the row where the value of {first_col_name} is "{row_value}", what is the corresponding value of {col_name}?'
+            'In the row where the value of "{first_col_name}" is "{row_value}", what is the corresponding value of "{col_name}?"'
         )
 
         index = random_cell_index(num_rows, num_cols, ignore_first_col=True)
@@ -107,7 +107,7 @@ def construct_table_pretraining_questions(table, k=10):
     return list(all_qa_pairs)
 
 
-def preprocess_table(samples, k=10):
+def preprocess_table(samples, k=20):
     tokenizer = AutoTokenizer.from_pretrained(model_path, device_map="auto")
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -119,7 +119,7 @@ def preprocess_table(samples, k=10):
 
         qa_pairs = construct_table_pretraining_questions(table, k=k)
 
-        if len(qa_pairs):
+        if len(qa_pairs) >= 10:
             dataset.append({
                 "graph": graph,
                 "question": [question for question, answer in qa_pairs],
@@ -293,7 +293,7 @@ if __name__ == "__main__":
     file_path = '/cpfs/29f69eb5e2e60f26/code/pretrain/xuyao/TaBERT/data/pretrain/data.pq'
     dataset = load_dataset("parquet", data_files=file_path)['train']
     
-    dataset = dataset.select(range(10_000_000))
+    # dataset = dataset.select(range(10_000_000))
     # remove_columns=["table"] is necessary
     dataset = dataset.map(preprocess_table, batched=True, num_proc=num_proc, load_from_cache_file=False, remove_columns=["table"])
     print(len(dataset))
@@ -303,7 +303,7 @@ if __name__ == "__main__":
     #     n += len(sample['question'])
     # print(n)
     
-    output_dir = 'data/pretraining_10M_tables'
+    output_dir = 'data/pretraining_25M_tables'
     dataset.to_parquet(f'{output_dir}/train.pq')
     dataset.select(range(100)).to_parquet(f'{output_dir}/val.pq')
     dataset.select(range(100)).to_parquet(f'{output_dir}/test.pq')

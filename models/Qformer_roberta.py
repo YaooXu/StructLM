@@ -399,7 +399,7 @@ class RobertaLayer(nn.Module):
         self.is_decoder = config.is_decoder
         self.add_cross_attention = config.add_cross_attention
         # if self.add_cross_attention and layer_idx % 2 != 0:
-        if self.add_cross_attention and layer_idx >= config.cross_attn_start_layer:
+        if self.add_cross_attention:
             if not self.is_decoder:
                 raise ValueError(f"{self} should be used as a decoder model if cross attention is added")
             self.crossattention = RobertaAttention(config, is_cross_attention=True, position_embedding_type="absolute")
@@ -550,8 +550,8 @@ class RobertaEncoder(nn.Module):
                     attention_mask,
                     layer_head_mask,
                     (
-                        encoder_hidden_states[i]
-                        if encoder_hidden_states is not None and isinstance(encoder_hidden_states, list)
+                        encoder_hidden_states[:, i, :, :]
+                        if encoder_hidden_states is not None and len(encoder_hidden_states.size()) == 4
                         else encoder_hidden_states
                     ),
                     encoder_attention_mask,
@@ -565,8 +565,8 @@ class RobertaEncoder(nn.Module):
                     attention_mask,
                     layer_head_mask,
                     (
-                        encoder_hidden_states[i]
-                        if encoder_hidden_states is not None and isinstance(encoder_hidden_states, list)
+                        encoder_hidden_states[:, i, :, :]
+                        if encoder_hidden_states is not None and len(encoder_hidden_states.size()) == 4
                         else encoder_hidden_states
                     ),
                     encoder_attention_mask,
@@ -954,8 +954,8 @@ class RobertaModel(RobertaPreTrainedModel):
                 encoder_hidden_states = [None] * (self.config.num_hidden_layers - len(encoder_hidden_states)) + encoder_hidden_states
             
             encoder_batch_size, encoder_sequence_length, _ = (
-                encoder_hidden_states[-1].size()
-                if isinstance(encoder_hidden_states, list) 
+                encoder_hidden_states[:, -1, :, :].size()
+                if len(encoder_hidden_states.size()) == 4
                 else encoder_hidden_states.size()
             )
             encoder_hidden_shape = (encoder_batch_size, encoder_sequence_length)

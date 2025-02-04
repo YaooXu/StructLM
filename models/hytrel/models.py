@@ -113,10 +113,11 @@ class Encoder(nn.Module):
                     graph_embeds, graph_attention_mask = self.get_graphs_embeds_and_attns(embedding_s, x_s_idxes)
                     all_graph_embeds.append(graph_embeds)
                 # [batch, num_nodes, dim] * num_layers
-                return all_graph_embeds, graph_attention_mask
+                graph_embeds = torch.stack(all_graph_embeds, 1)
             else:
                 graph_embeds, graph_attention_mask = self.get_graphs_embeds_and_attns(all_embedding_s[-1], x_s_idxes)
-                return graph_embeds, graph_attention_mask
+                
+            return graph_embeds, graph_attention_mask
 
     def get_list_of_graph_embeds_and_attns(self, embedding_s, x_s_idxes):
         list_graph_attn = []

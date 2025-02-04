@@ -14,4 +14,4 @@
 
 # huggingface-cli download --repo-type=dataset --local-dir=data/processed/ TIGER-Lab/SKGInstruct ./skginstruct_test_file_7b.json 
 
-huggingface-cli download --repo-type=model neuralmagic/Llama-2-7b-gsm8k
+huggingface-cli download --repo-type=model mistralai/Mistral-7B-Instruct-v0.2 --include *.safetensors

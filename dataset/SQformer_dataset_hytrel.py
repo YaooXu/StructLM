@@ -270,57 +270,52 @@ class GraphDataset(Dataset):
                 label = sample['label']
                 question = sample['question']
 
-        if 'graph_path' in sample:
-            # use cache
-            try:
-                with zipfile.ZipFile(sample['graph_path'][0], 'r') as zipf:
-                    # 打开并读取特定文件
-                    with zipf.open(sample['graph_path'][1]) as file:
-                        serialized_dict = file.read()
-                        # 反序列化字典对象
-                        graph = pickle.loads(serialized_dict)
-            except Exception as e:
-                graph = None
-                print(sample['graph_path'])
-                print(e)
+        if self.num_query_tokens > 0:
+            # use GNN and load graph
+            
+            if 'graph_path' in sample:
+                # use cache
+                try:
+                    with zipfile.ZipFile(sample['graph_path'][0], 'r') as zipf:
+                        # 打开并读取特定文件
+                        with zipf.open(sample['graph_path'][1]) as file:
+                            serialized_dict = file.read()
+                            # 反序列化字典对象
+                            graph = pickle.loads(serialized_dict)
+                except Exception as e:
+                    graph = None
+                    print(sample['graph_path'])
+                    print(e)
+            else:
+                graph = sample['graph']
+            
+            # gformer input and target (for pretraining)
+            tokenized_input = self.encoder_tokenizer(question, return_attention_mask=False, add_special_tokens=False)
+            tokenized_target = self.encoder_tokenizer(label, return_attention_mask=False, add_special_tokens=False)
+            
+            s = [self.encoder_tokenizer.bos_token_id] + tokenized_input["input_ids"]
+            t = [self.encoder_tokenizer.gen_token_id] + tokenized_target["input_ids"] + [self.encoder_tokenizer.eos_token_id]
+
+            question_ids = torch.LongTensor(s)[:self.max_qformer_length]
+            qformer_output = torch.LongTensor(t)[:self.max_qformer_length]
+
+            decoder_input_ids = pad_2d_tensor(qformer_output, self.max_qformer_length, self.encoder_tokenizer.pad_token_id)
+            question_ids = pad_2d_tensor(question_ids, self.max_qformer_length, self.encoder_tokenizer.pad_token_id)
+
+            qformer_input = {
+                'graph': graph,
+                "decoder_input_ids": decoder_input_ids,
+                "question_ids": question_ids,
+            }
+            item = {
+                "qformer_input": qformer_input,
+            }
+            if self.sqformer_pretraining:
+                return item
+
         else:
-            graph = sample['graph']
+            item = {}
         
-        # gformer input and target (for pretraining)
-        tokenized_input = self.encoder_tokenizer(question, return_attention_mask=False, add_special_tokens=False)
-        tokenized_target = self.encoder_tokenizer(label, return_attention_mask=False, add_special_tokens=False)
-        
-        s = [self.encoder_tokenizer.gen_token_id] + tokenized_input["input_ids"]
-        t = [self.encoder_tokenizer.bos_token_id] + tokenized_target["input_ids"] + [self.encoder_tokenizer.eos_token_id]
-
-        qformer_input_ids = torch.LongTensor(s)[:self.max_qformer_length]
-        qformer_labels = torch.LongTensor(t)[:self.max_qformer_length]
-        qformer_question_ids = torch.LongTensor(s)[:self.max_qformer_length]
-
-        # s = [self.encoder_tokenizer.bos_token_id] + tokenized_input["input_ids"]
-        # t = tokenized_target["input_ids"] + [self.encoder_tokenizer.eos_token_id]
-
-        # qformer_input_ids = torch.LongTensor(s + t)[:self.max_qformer_length]
-        # qformer_labels = torch.LongTensor([IGNORE_INDEX] * len(s) + t)[:self.max_qformer_length]
-             
-        qformer_input_ids = pad_2d_tensor(qformer_input_ids, self.max_qformer_length, self.encoder_tokenizer.pad_token_id)
-        qformer_output_ids = pad_2d_tensor(qformer_labels, self.max_qformer_length, self.encoder_tokenizer.pad_token_id)
-        qformer_question_ids = pad_2d_tensor(qformer_question_ids, self.max_qformer_length, self.encoder_tokenizer.pad_token_id)
-        qformer_labels = pad_2d_tensor(qformer_labels, self.max_qformer_length, IGNORE_INDEX)
-
-        qformer_input = {
-            'graph': graph,
-            "input_ids": qformer_input_ids,
-            "output_ids": qformer_output_ids,
-            "qformer_question_ids": qformer_question_ids,
-            "labels": qformer_labels,
-        }
-        item = {
-            "qformer_input": qformer_input,
-        }
-        if self.sqformer_pretraining:
-            return item
-
         assert '[GRAPH_PAD]' in input_
         if self.num_query_tokens > 0:
             if self.num_query_tokens == 400:
@@ -392,28 +387,27 @@ class DataCollatorForGraphSupervisedDataset(object):
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
         self._set_llm_padding_side()
 
-        # gformer input
-        graphs = [BipartiteData(**instance['qformer_input']["graph"]) for instance in instances]
-        graphs = Batch.from_data_list(graphs, follow_batch=['x_s', 'x_t'])
-        
-        # graphs = merge_graph(graphs)
-        # print(graphs['dist_mat'].shape)
+        if 'qformer_input' in instances[0]:
+            # gformer input
+            graphs = [BipartiteData(**instance['qformer_input']["graph"]) for instance in instances]
+            graphs = Batch.from_data_list(graphs, follow_batch=['x_s', 'x_t'])
+            
+            # graphs = merge_graph(graphs)
+            # print(graphs['dist_mat'].shape)
 
-        # no need to pad, as they have the same length
-        qformer_input_ids = torch.stack([instance['qformer_input']["input_ids"] for instance in instances])
-        qformer_output_ids = torch.stack([instance['qformer_input']["output_ids"] for instance in instances])
-        qformer_question_ids = torch.stack([instance['qformer_input']["qformer_question_ids"] for instance in instances])
-        qformer_labels = torch.stack([instance['qformer_input']["labels"] for instance in instances])
+            # no need to pad, as they have the same length
+            decoder_input_ids = torch.stack([instance['qformer_input']["decoder_input_ids"] for instance in instances])
+            question_ids = torch.stack([instance['qformer_input']["question_ids"] for instance in instances])
 
-        qformer_inputs = {
-            "input_ids": qformer_input_ids,
-            "output_ids": qformer_output_ids,
-            "question_ids": qformer_question_ids,
-            "question_attention_mask": qformer_question_ids.ne(self.encoder_tokenizer.pad_token_id),
-            "labels": qformer_labels,
-            "attention_mask": qformer_input_ids.ne(self.encoder_tokenizer.pad_token_id),
-            "graphs": graphs,
-        }
+            qformer_inputs = {
+                "decoder_input_ids": decoder_input_ids,
+                "question_ids": question_ids,
+                "question_attention_mask": question_ids.ne(self.encoder_tokenizer.pad_token_id),
+                "graphs": graphs,
+            }
+        else:
+            qformer_inputs = {}
+            
         batch = {
             'qformer_inputs': qformer_inputs
         } 
@@ -449,139 +443,3 @@ class DataCollatorForGenerating(DataCollatorForGraphSupervisedDataset):
 
     def _set_llm_padding_side(self):
         self.llm_tokenizer.padding_side = "left"
-
-
-if __name__ == "__main__":
-    from transformers import AutoTokenizer, set_seed
-    from torch.utils.data import DataLoader, Dataset
-
-    set_seed(0)
-
-    dataset_dir = pathlib.Path("data/8Tab_tasks_ori_input_no_inter")
-
-    llm_tokenizer = AutoTokenizer.from_pretrained('meta-llama/Llama-2-7b-hf', use_fast=False)
-    encoder_tokenizer = AutoTokenizer.from_pretrained(
-        "google-bert/bert-base-uncased", use_fast=False)
-
-    graph_pad_token = DEFAULT_GRAPH_PAD_TOKEN
-    encoder_tokenizer.add_tokens(
-        new_tokens=["[TAB]", "[HEAD]", "[CELL]", "[ROW]", "scinotexp"],
-        special_tokens=True,
-    )
-    llm_tokenizer.add_tokens([graph_pad_token], special_tokens=True)
-    llm_tokenizer.pad_token = llm_tokenizer.eos_token
-
-    max_seq_length = 2560
-    max_desc_length = 2048
-    num_query_tokens = 0
-    preprocessing_num_workers = 40
-    reprocess = False
-    train_dataset = build_instruction_dataset(
-        dataset_dir / f"train.pq",
-        llm_tokenizer,
-        encoder_tokenizer,
-        max_seq_length=max_seq_length,
-        max_desc_length=max_desc_length,
-        num_query_tokens=num_query_tokens,
-        preprocessing_num_workers=preprocessing_num_workers,
-        reprocess=reprocess,
-    )
-    val_dataset = build_instruction_dataset(
-        dataset_dir / f"val.pq",
-        llm_tokenizer,
-        encoder_tokenizer,
-        max_seq_length=max_seq_length,
-        max_desc_length=max_desc_length,
-        num_query_tokens=num_query_tokens,
-        preprocessing_num_workers=preprocessing_num_workers,
-        reprocess=reprocess,
-    )
-    test_dataset = build_instruction_dataset(
-        dataset_dir / f"test.pq",
-        llm_tokenizer,
-        encoder_tokenizer,
-        max_seq_length=max_seq_length,
-        max_desc_length=max_desc_length,
-        num_query_tokens=num_query_tokens,
-        preprocessing_num_workers=preprocessing_num_workers,
-        training=False,
-        reprocess=reprocess,
-    )
-    data_collator = DataCollatorForGraphSupervisedDataset(llm_tokenizer)
-
-    loader = DataLoader(val_dataset, 2, collate_fn=data_collator)
-    for batch in loader:
-        print(batch)
-        break
-
-    # from models.hytrel import Encoder
-    # from collections import OrderedDict
-    # from transformers import AutoConfig
-    # @dataclass
-    # class OptimizerConfig:
-    #     batch_size: int = 256
-    #     base_learning_rate: float = 1e-3
-    #     weight_decay: float = 0.02
-    #     adam_beta1: float = 0.9
-    #     adam_beta2: float = 0.98
-    #     adam_epsilon: float = 1e-5
-    #     lr_scheduler_type: transformers.SchedulerType = "linear"
-    #     warmup_step_ratio: float = 0.1
-    #     seed: int = 42
-    #     optimizer: str = "Adam"
-    #     adam_w_mode: bool = True
-    #     save_every_n_epochs: int=1
-    #     save_top_k: int=1
-    #     checkpoint_path: str=''
-
-    #     def __post_init__(self):
-    #         if self.optimizer.lower() not in {
-    #             "adam",
-    #             "fusedadam",
-    #             "fusedlamb",
-    #             "fusednovograd",
-    #         }:
-    #             raise KeyError(
-    #                 f"The optimizer type should be one of: Adam, FusedAdam, FusedLAMB, FusedNovoGrad. The current value is {self.optimizer}."
-    #             )
-
-    #     def get_optimizer(self, optim_groups, learning_rate):
-    #         optimizer = self.optimizer.lower()
-    #         optim_cls = {
-    #             "adam": AdamW if self.adam_w_mode else Adam,
-    #         }[optimizer]
-
-    #         args = [optim_groups]
-    #         kwargs = {
-    #             "lr": learning_rate,
-    #             "eps": self.adam_epsilon,
-    #             "betas": (self.adam_beta1, self.adam_beta2),
-    #         }
-    #         if optimizer in {"fusedadam", "fusedlamb"}:
-    #             kwargs["adam_w_mode"] = self.adam_w_mode
-
-    #         optimizer = optim_cls(*args, **kwargs)
-    #         return optimizer
-
-    # model_config = AutoConfig.from_pretrained("google-bert/bert-base-uncased")
-    # model_config.update({'vocab_size': len(encoder_tokenizer), "pre_norm": False, "activation_dropout":0.1, "gated_proj": False})
-
-    # encoder = Encoder(model_config)
-
-    # state_dict = torch.load(
-    #     open(
-    #         "/home/yaoxu/hypergraph-tabular-lm/checkpoints/electra/epoch=4-step=16345.ckpt/checkpoint/mp_rank_00_model_states.pt",
-    #         "rb",
-    #     )
-    # )
-
-    # new_state_dict = OrderedDict()
-    # for k, v in state_dict["module"].items():
-    #     if "model" in k:
-    #         name = k[13:]  # remove `module.model.`
-    #         new_state_dict[name] = v
-    # encoder.load_state_dict(new_state_dict, strict=True)
-
-    # encoder.to('cuda')
-    # graph = batch['graph']['graph'].to('cuda')
-    # x = encoder(batch['graph']['graph'])

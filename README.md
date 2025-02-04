@@ -21,8 +21,13 @@ pip install -r requirements.txt
 
 ## Prepare pretraining datasets
 
-```
-bash ./preprocess/construct_data.sh
+```bash
+# download pretraining data
+git clone https://github.com/YaooXu/TaBERT.git
+cd TaBERT
+bash get_pretrain_data.sh
+
+python preprocess/construct_pretrain_data.py 
 ```
 
 ## Pretraining

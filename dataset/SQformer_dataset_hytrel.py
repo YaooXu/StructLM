@@ -298,14 +298,17 @@ class GraphDataset(Dataset):
 
             question_ids = torch.LongTensor(s)[:self.max_qformer_length]
             qformer_output = torch.LongTensor(t)[:self.max_qformer_length]
+            text_ids = torch.LongTensor(s + t)[:2 * self.max_qformer_length]
 
             decoder_input_ids = pad_2d_tensor(qformer_output, self.max_qformer_length, self.encoder_tokenizer.pad_token_id)
             question_ids = pad_2d_tensor(question_ids, self.max_qformer_length, self.encoder_tokenizer.pad_token_id)
+            text_ids = pad_2d_tensor(text_ids, 2 * self.max_qformer_length, self.encoder_tokenizer.pad_token_id)
 
             qformer_input = {
                 'graph': graph,
                 "decoder_input_ids": decoder_input_ids,
                 "question_ids": question_ids,
+                "text_ids": text_ids
             }
             item = {
                 "qformer_input": qformer_input,
@@ -398,11 +401,14 @@ class DataCollatorForGraphSupervisedDataset(object):
             # no need to pad, as they have the same length
             decoder_input_ids = torch.stack([instance['qformer_input']["decoder_input_ids"] for instance in instances])
             question_ids = torch.stack([instance['qformer_input']["question_ids"] for instance in instances])
+            text_ids = torch.stack([instance['qformer_input']["text_ids"] for instance in instances])
 
             qformer_inputs = {
                 "decoder_input_ids": decoder_input_ids,
                 "question_ids": question_ids,
                 "question_attention_mask": question_ids.ne(self.encoder_tokenizer.pad_token_id),
+                "text_ids": text_ids,
+                "text_ids_mask": text_ids.ne(self.encoder_tokenizer.pad_token_id),               
                 "graphs": graphs,
             }
         else:

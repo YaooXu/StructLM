@@ -153,7 +153,6 @@ class GFormer(nn.Module):
 
     def gen_query_embeds_v3(self, qformer_inputs, llm, llm_graph_pad_token_id):
         text_ids, text_atts = qformer_inputs["question_ids"], qformer_inputs["question_attention_mask"]
-
         batch_size = text_ids.shape[0]
 
         if self.args.gformer.skip_graph_encoder:
@@ -164,9 +163,11 @@ class GFormer(nn.Module):
             else:
                 if self.args.gformer.only_gnn:
                     list_graph_embeds = self.graph_encoder(qformer_inputs["graphs"], not_pad_graph_embeds=True)
+                    list_graph_embeds = [self.graph_ln(graph_embeds) for graph_embeds in list_graph_embeds]
                     return list_graph_embeds
                 else:
                     graph_embeds, graph_attention_mask = self.graph_encoder(qformer_inputs["graphs"])
+                    graph_embeds = self.graph_ln(graph_embeds)
 
             query_embeds = self.query_token_embeds.unsqueeze(0).expand(batch_size, -1, -1)
             query_atts = torch.ones(query_embeds.shape[:-1]).to(query_embeds.device)
@@ -197,8 +198,8 @@ class GFormer(nn.Module):
         return query_embeds
     
     def forward(self, qformer_inputs, **kwargs):
-        text_ids, text_atts = qformer_inputs["question_ids"], qformer_inputs["question_attention_mask"]
-        batch_size = text_ids.shape[0]
+        question_ids, question_atts = qformer_inputs["question_ids"], qformer_inputs["question_attention_mask"]
+        batch_size = question_ids.shape[0]
 
         # [batch, num_nodes, dim] * num_gnn_layers
         graph_embeds, graph_attention_mask = self.graph_encoder(qformer_inputs["graphs"])
@@ -208,9 +209,9 @@ class GFormer(nn.Module):
         query_atts = torch.ones(query_embeds.shape[:-1]).to(query_embeds.device)
         
         ##================= Question Answering ========================##
-        attention_mask = torch.cat([query_atts, text_atts], dim=1)
+        attention_mask = torch.cat([query_atts, question_atts], dim=1)
         query_output = self.model.roberta(
-            text_ids,
+            question_ids,
             query_embeds=query_embeds,
             attention_mask=attention_mask,
             encoder_hidden_states=graph_embeds,
@@ -225,7 +226,7 @@ class GFormer(nn.Module):
         )
         label_atts = torch.ones(labels.shape).to(query_embeds.device)
 
-        attention_mask = torch.cat([query_atts, text_atts, label_atts], dim=1)
+        attention_mask = torch.cat([query_atts, question_atts, label_atts], dim=1)
         lm_output = self.model(
             decoder_input_ids,
             attention_mask=attention_mask,
@@ -236,6 +237,8 @@ class GFormer(nn.Module):
         lm_loss = lm_output.loss
                        
         ###============== Graph-text Matching ===================###
+        text_ids, text_atts = qformer_inputs["text_ids"], qformer_inputs["text_ids_mask"]
+        
         text_input_ids_world = concat_all_gather(text_ids)
         text_attention_mask_world = concat_all_gather(text_atts)
         graph_attention_mask_world = concat_all_gather(graph_attention_mask)

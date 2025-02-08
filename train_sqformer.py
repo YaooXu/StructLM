@@ -53,7 +53,7 @@ class WarppedTrainingArguments(TrainingArguments):
     dataset_dir: str = field(default=None)
     max_desc_length: int = field(default=2048)
     max_seq_length: int = field(default=2560)
-    max_qformer_length: int = field(default=64)
+    max_qformer_length: int = field(default=32)
     
     preprocessing_num_workers: int = field(default=8)
     data_cache_dir: Optional[str] = field(default=None, metadata={"help": "The datasets processed stored"})
